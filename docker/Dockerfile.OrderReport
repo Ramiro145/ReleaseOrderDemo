@@ -1,0 +1,26 @@
+# Etapa base: runtime de ASP.NET
+FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS base
+WORKDIR /app
+
+# Etapa build: SDK para compilar
+FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
+WORKDIR /src
+
+# Copiar primero los csproj para aprovechar caché
+COPY ./src/Contracts/Contracts.csproj ./Contracts/
+COPY ./src/OrderReport/OrderReport.csproj ./OrderReport/
+RUN dotnet restore ./OrderReport/OrderReport.csproj
+
+# Copiar el resto del código
+COPY ./src/Contracts ./Contracts
+COPY ./src/OrderReport ./OrderReport
+
+# Compilar y publicar
+WORKDIR /src/OrderReport
+RUN dotnet publish -c Release -o /app/publish
+
+# Etapa final: runtime ASP.NET
+FROM base AS final
+WORKDIR /app
+COPY --from=build /app/publish .
+ENTRYPOINT ["dotnet", "OrderReport.dll"]

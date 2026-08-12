@@ -1,0 +1,12 @@
+services:
+  api:
+    environment:
+      - SQLSERVER_CONN=Server=db;Database=OrdersDb;User Id=sa;Password=YourStrong!Passw0rd;TrustServerCertificate=True;
+
+  release-orden-worker:
+    environment:
+      - SQLSERVER_CONN=Server=db;Database=OrdersDb;User Id=sa;Password=YourStrong!Passw0rd;TrustServerCertificate=True;
+
+  orderreport-worker:
+    environment:
+      - SQLSERVER_CONN=Server=db;Database=OrdersDb;User Id=sa;Password=YourStrong!Passw0rd;TrustServerCertificate=True;

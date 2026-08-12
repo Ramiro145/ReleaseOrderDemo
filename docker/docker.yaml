@@ -1,0 +1,23 @@
+persistence:
+  defaultStore: default
+  visibilityStore: visibility
+  numHistoryShards: 4
+
+  dataStores:
+    default:
+      sql:
+        pluginName: postgres
+        databaseName: temporal
+        connectAddr: temporal-db:5432
+        connectProtocol: tcp
+        user: temporal
+        password: temporal
+
+    visibility:
+      sql:
+        pluginName: postgres
+        databaseName: temporal
+        connectAddr: temporal-db:5432
+        connectProtocol: tcp
+        user: temporal
+        password: temporal

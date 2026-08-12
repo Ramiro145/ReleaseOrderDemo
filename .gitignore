@@ -1,0 +1,5 @@
+obj/
+bin/
+.claude/
+.claude/worktrees/agitated-hopper
+.vs

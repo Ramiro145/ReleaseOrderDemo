@@ -1,0 +1,27 @@
+# Carpetas de compilación
+bin/
+obj/
+
+# Archivos de usuario y configuración local
+*.user
+*.suo
+*.vscode/
+*.vs/
+*.idea/
+
+# Archivos de control de versiones
+.git/
+.gitignore
+.gitattributes
+
+# Archivos de sistema
+*.DS_Store
+Thumbs.db
+
+# Archivos de logs y temporales
+*.log
+*.tmp
+
+# Configuración de Docker y Compose
+docker-compose.override.yml
+Dockerfile.*

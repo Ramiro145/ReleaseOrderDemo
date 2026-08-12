@@ -1,0 +1,20 @@
+# The Docker image that will be used to build your app
+image: alpine
+pages:
+  # The folder that contains the files to be exposed at the Page URL
+  # publish: public
+  rules:
+    # This ensures that only pushes to the default branch will trigger
+    # a pages deploy
+    - if: $CI_COMMIT_REF_NAME == "main"
+  # Functions that should be executed before the build script is run
+  script:
+    - apk update && apk add doxygen graphviz ttf-freefont openjdk11 wget
+    - wget https://github.com/plantuml/plantuml/releases/download/v1.2025.4/plantuml-1.2025.4.jar -O plantuml.jar
+    - doxygen cfg/doxygen.conf
+    - mv doc/html/ public/
+  # Output
+  artifacts:
+    paths:
+      - public
+

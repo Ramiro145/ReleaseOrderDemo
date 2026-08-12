@@ -1,0 +1,125 @@
+services:
+  api:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.OrderApi
+    container_name: order_api
+    ports:
+      - "5000:5000"   # externo 5000 → interno 5000
+      - "5001:5001"   # externo 5001 → interno 5001
+    environment:
+      - ConnectionStrings__Default=Server=db;Database=OrdersDb;User Id=sa;Password=YourStrong!Passw0rd;TrustServerCertificate=True;
+      - TEMPORAL_HOST=temporal:7233
+    depends_on:
+      - db
+      - temporal
+
+  crear-orden-worker:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.ReleaseOrder
+    container_name: crear_orden_worker
+    command: ["create", "worker"]
+    environment:
+      - DB_CONNECTION=Server=db;Database=OrdersDb;User Id=sa;Password=YourStrong!Passw0rd;TrustServerCertificate=True;
+      - TEMPORAL_HOST=temporal:7233
+    depends_on:
+      - db
+      - temporal
+
+  release-orden-worker:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.ReleaseOrder
+    container_name: release_orden_worker
+    command: ["release", "worker"]
+    environment:
+      - DB_CONNECTION=Server=db;Database=OrdersDb;User Id=sa;Password=YourStrong!Passw0rd;TrustServerCertificate=True;
+      - TEMPORAL_HOST=temporal:7233
+    depends_on:
+      - db
+      - temporal
+
+  orderreport-worker:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.OrderReport
+    container_name: orderreport_worker
+    environment:
+      - SQLSERVER_CONN=Server=db;Database=OrdersDb;User Id=sa;Password=YourStrong!Passw0rd;TrustServerCertificate=True;
+      - TEMPORAL_HOST=temporal:7233
+    depends_on:
+      - db
+      - temporal
+
+  db:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: sql_server
+    ports:
+      - "1433:1433"
+    environment:
+      - ACCEPT_EULA=Y
+      - SA_PASSWORD=YourStrong!Passw0rd
+    volumes:
+      - sql_data:/var/opt/mssql
+      - ../scripts/db:/docker-entrypoint-initdb.d
+
+  db-init:
+    image: mcr.microsoft.com/mssql-tools
+    container_name: db_init
+    depends_on:
+      - db
+    command: >-
+      /bin/bash -c "sleep 20 &&
+      /opt/mssql-tools/bin/sqlcmd -S db -U sa -P YourStrong!Passw0rd -d master -i /docker-entrypoint-initdb.d/init.sql &&
+      /opt/mssql-tools/bin/sqlcmd -S db -U sa -P YourStrong!Passw0rd -d master -i /docker-entrypoint-initdb.d/fix_orders_products_fk.sql"
+    volumes:
+      - ../scripts/db/:/docker-entrypoint-initdb.d
+
+  temporal:
+      image: temporalio/auto-setup:1.23.0
+      container_name: temporal
+      depends_on:
+        temporal-db:
+          condition: service_healthy
+      environment:
+        DB: postgresql
+        DBNAME: temporal
+        DB_PORT: 5432
+        POSTGRES_USER: temporal
+        POSTGRES_PWD: temporal
+        POSTGRES_NAME: temporal
+        POSTGRES_SEEDS: temporal-db
+      ports:
+        - "7233:7233"
+
+
+  temporal-db:
+    image: postgres:15
+    container_name: temporal_db
+    environment:
+      - POSTGRES_USER=temporal
+      - POSTGRES_PASSWORD=temporal
+      - POSTGRES_DB=temporal
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U temporal"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - temporal_data:/var/lib/postgresql/data
+
+  temporal-ui:
+      image: temporalio/ui:2.23.0
+      container_name: temporal-ui
+      ports:
+        - "8233:8080"
+      environment:
+        TEMPORAL_ADDRESS: temporal:7233
+
+
+volumes:
+  sql_data:
+  temporal_data:
