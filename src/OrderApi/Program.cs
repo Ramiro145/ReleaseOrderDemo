@@ -94,6 +94,54 @@ app.MapPost("/orders/{orderId}/release/decision", async (
     });
 });
 
+// Endpoint: enviar una decisión externa al Workflow mediante Update.
+// A diferencia de la Signal (Accepted, sin resultado), el Update corre un
+// validador antes de aceptarse y devuelve el resultado de forma síncrona.
+app.MapPost("/orders/{orderId}/release/decision-update", async (
+    int orderId,
+    ReleaseDecision decision,
+    TemporalClient client) =>
+{
+    var workflowId = $"release-order-{orderId}";
+
+    var findWorkflow =  await WorkflowValidator.ValidateWorkflowAsync(client, workflowId);
+
+    if (!findWorkflow.Exists)
+    {
+        return Results.NotFound(
+            new
+            {
+                WorkflowId = workflowId,
+                Error = findWorkflow.Error
+            }    
+        );
+    }
+
+    var handle = client.GetWorkflowHandle<IReleaseOrderWorkflow>(workflowId);
+
+    try
+    {
+        var result = await handle.ExecuteUpdateAsync(
+            wf => wf.SubmitReleaseDecisionUpdateAsync(decision));
+
+        return Results.Ok(new
+        {
+            WorkflowId = workflowId,
+            decision.Approved,
+            decision.Reason,
+            Result = result
+        });
+    }
+    catch (Temporalio.Exceptions.WorkflowUpdateFailedException ex)
+    {
+        return Results.BadRequest(new
+        {
+            WorkflowId = workflowId,
+            Error = ex.InnerException?.Message ?? ex.Message
+        });
+    }
+});
+
 // Endpoint: consultar estado de orden
 app.MapGet("/orders/{orderId}/status", async (int orderId, TemporalClient client) =>
 {

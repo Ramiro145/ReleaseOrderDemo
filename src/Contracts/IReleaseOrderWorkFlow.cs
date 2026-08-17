@@ -16,6 +16,11 @@ public interface IReleaseOrderWorkflow
     [WorkflowSignal]
     Task SubmitReleaseDecisionAsync(ReleaseDecision decision);
 
+    // Update: mismo propósito que la Signal, pero corre un validador síncrono
+    // antes de aceptarse y devuelve un resultado al llamador.
+    [WorkflowUpdate]
+    Task<string> SubmitReleaseDecisionUpdateAsync(ReleaseDecision decision);
+
     // Query opcional para consultar el estado actual
     [WorkflowQuery]
     string GetStatus();

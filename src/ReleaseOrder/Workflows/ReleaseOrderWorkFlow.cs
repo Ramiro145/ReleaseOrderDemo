@@ -42,6 +42,10 @@ public class ReleaseOrderWorkflow : IReleaseOrderWorkflow
         try
         {
             _status = "Loading order";
+            // TEMPORAL: delay de prueba para poder probar el rechazo del
+            // validador del Update mientras el estado no es "Waiting for
+            // release decision". Revertir luego de probar.
+            await Workflow.DelayAsync(TimeSpan.FromSeconds(10));
             var order = await Workflow.ExecuteActivityAsync(
                 (OrderLookupActivities a) => a.GetOrderAsync(orderId),
                 DefaultOptions);
@@ -145,6 +149,34 @@ public class ReleaseOrderWorkflow : IReleaseOrderWorkflow
         }
 
         return Task.CompletedTask;
+    }
+
+    [WorkflowUpdate]
+    public Task<string> SubmitReleaseDecisionUpdateAsync(ReleaseDecision decision)
+    {
+        // A diferencia de la Signal, el validador ya descartó estados inválidos
+        // antes de llegar aquí, así que solo queda aplicar la misma regla de
+        // "la primera decisión gana" para tolerar reintentos del cliente.
+        if (!_decisionReceived)
+        {
+            _decision = decision;
+            _decisionReceived = true;
+        }
+
+        return Task.FromResult(decision.Approved
+            ? "Decision accepted: order will be completed."
+            : "Decision accepted: order will be compensated.");
+    }
+
+    [WorkflowUpdateValidator(nameof(SubmitReleaseDecisionUpdateAsync))]
+    public void ValidateSubmitReleaseDecisionUpdate(ReleaseDecision decision)
+    {
+        // El validador corre síncronamente en el Worker antes de que el Update
+        // se acepte: si falla, no queda evento en el Event History y el
+        // llamador recibe el rechazo de inmediato (la Signal no puede hacer esto).
+        if (_status != "Waiting for release decision")
+            throw new ApplicationException(
+                $"Cannot submit release decision via Update: workflow is in '{_status}' state, not waiting for a decision.");
     }
 
     [WorkflowQuery]
