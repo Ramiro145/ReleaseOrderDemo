@@ -4,9 +4,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-Didactic demo of two Temporal.io capabilities on .NET 8: SAGA compensation and durable waits via
-Signal. Domain (orders/inventory/payment) is kept deliberately simple — see README.md for the
-full walkthrough of the two test scenarios (Signal approved / Signal rejected).
+Didactic demo of Temporal.io capabilities on .NET 8: SAGA compensation, durable waits via Signal
+and Update, and retryable vs non-retryable Activity errors. Domain (orders/inventory/payment) is
+kept deliberately simple — see README.md for the full walkthrough of the two test scenarios
+(Signal approved / Signal rejected).
 
 ## Build / run
 
@@ -61,11 +62,37 @@ Five projects under `src/`, all targeting net8.0, referencing `Temporalio` 1.9.0
     (lookup order → reserve inventory → process payment), pushing a compensation onto a
     `Stack<Func<Task>>` after each reversible step. Then calls
     `Workflow.WaitConditionAsync(() => _decisionReceived)` and blocks (no polling, no thread held)
-    until the `SubmitReleaseDecisionAsync` `[WorkflowSignal]` fires. First signal wins; later ones
-    are ignored (idempotency for duplicate signals). On approval, marks the order `Completed`; on
-    rejection or any thrown exception, unwinds the compensation stack LIFO and marks the order
+    until either the `SubmitReleaseDecisionAsync` `[WorkflowSignal]` fires or the
+    `SubmitReleaseDecisionUpdateAsync` `[WorkflowUpdate]` is called — same underlying decision
+    state, so whichever arrives first wins and the other is ignored (idempotency for
+    duplicates/both being sent). The Update path additionally runs
+    `[WorkflowUpdateValidator] ValidateSubmitReleaseDecisionUpdate` synchronously before being
+    accepted: it rejects (no event written, caller gets the error immediately) unless
+    `_status == "Waiting for release decision"` — the Signal path has no equivalent guard and is
+    always accepted. On approval, marks the order `Completed`; on rejection or any thrown
+    exception, unwinds the compensation stack LIFO and marks the order
     `Compensated`/`CompensationFailed`/`Failed`. `[WorkflowQuery] GetStatus()` exposes the current
     step string for polling from the API.
+  - `Activities/PaymentActivities.cs` — `ProcessPaymentAsync` doubles as the demo's example of
+    Temporal retry semantics, keyed off the order `Amount` so both paths are reachable from
+    `POST /orders` with no extra plumbing: `Amount == TransientFailureAmount` (999999) throws a
+    plain `ApplicationException` to simulate a transient gateway timeout — retryable, so it
+    consumes all `MaximumAttempts` of `DefaultOptions` (3, with backoff) before the SAGA
+    compensates; `Amount <= 0` (checked in `Services/PaymentService.cs`) simulates a gateway
+    decline and throws `Temporalio.Exceptions.ApplicationFailureException` with
+    `nonRetryable: true`, which skips retries entirely and compensates on the first failure.
+    `PaymentService.FailPayment` is an older test-only flag with the same effect as `Amount <= 0`
+    but nothing in the repo sets it — prefer the magic `Amount` values.
+  - `Activities/InventoryActivities.cs` — `ReserveInventoryAsync` shows the other way to mark an
+    error non-retryable: from the *workflow* side instead of the Activity. The Activity just
+    throws a plain, Temporal-agnostic `InventoryUnavailableException` (`Activities/InventoryUnavailableException.cs`)
+    when stock is insufficient (real domain check in `Services/InventoryService.ReserveAsync`
+    against `Products.Stock` — reachable by creating an order with `Quantity` above the seeded
+    stock for that product, no magic value needed). `ReleaseOrderWorkFlow.cs`'s
+    `InventoryReserveOptions` lists `nameof(InventoryUnavailableException)` in
+    `RetryPolicy.NonRetryableErrorTypes`, so the workflow — not the Activity — decides this
+    exception type skips retries. Contrast with `PaymentActivities`, where the Activity itself
+    throws `ApplicationFailureException(nonRetryable: true)`.
   - `Workflows/CrearOrderWorkFlow.cs` — a plainer SAGA (no Signal) for order creation: mark
     Created → reserve inventory → mark Completed, compensating to `Failed` on error.
   - `Activities/*` — `InventoryActivities`, `PaymentActivities`, `ShippingActivities`,
@@ -86,6 +113,10 @@ Five projects under `src/`, all targeting net8.0, referencing `Temporalio` 1.9.0
     fresh `orderId` per test run, per README).
   - `POST /orders/{orderId}/release/decision` — signals that workflow with a `ReleaseDecision`
     (`{ approved, reason }`), driving the approve/reject path described above.
+  - `POST /orders/{orderId}/release/decision-update` — same decision, sent as a `[WorkflowUpdate]`
+    via `ExecuteUpdateAsync` instead of a Signal: synchronous result, and rejected with 400
+    (`WorkflowUpdateFailedException`) if the workflow isn't in `"Waiting for release decision"`
+    yet — a check the Signal endpoint above cannot perform.
   - `GET /orders/{orderId}/status` — uses `WorkflowValidator` then queries `GetStatus` on the
     workflow handle; falls back to the Temporal execution status if the query RPC times out.
   - `GET /reports/{orderId}` — starts `OrderReportWorkflow` on `report-task-queue` and awaits its
