@@ -19,6 +19,22 @@ public class ReleaseOrderWorkflow : IReleaseOrderWorkflow
         }
     };
 
+    // Mismo timeout/retries que DefaultOptions, pero declara del lado del workflow que
+    // InventoryUnavailableException (falta de stock, error de negocio) no debe reintentarse.
+    // Contrasta con PaymentActivities, donde la Activity misma decide con
+    // ApplicationFailureException(nonRetryable: true).
+    private static readonly ActivityOptions InventoryReserveOptions = new()
+    {
+        StartToCloseTimeout = TimeSpan.FromSeconds(30),
+        RetryPolicy = new RetryPolicy
+        {
+            MaximumAttempts = 3,
+            InitialInterval = TimeSpan.FromSeconds(1),
+            BackoffCoefficient = 2.0F,
+            NonRetryableErrorTypes = new[] { nameof(InventoryUnavailableException) }
+        }
+    };
+
     private static readonly ActivityOptions CompensationOptions = new()
     {
         StartToCloseTimeout = TimeSpan.FromSeconds(30),
@@ -56,7 +72,7 @@ public class ReleaseOrderWorkflow : IReleaseOrderWorkflow
                     orderId,
                     order.ProductId,
                     order.Quantity),
-                DefaultOptions);
+                InventoryReserveOptions);
 
             compensations.Push(() => Workflow.ExecuteActivityAsync(
                 (InventoryActivities a) => a.CancelInventoryAsync(

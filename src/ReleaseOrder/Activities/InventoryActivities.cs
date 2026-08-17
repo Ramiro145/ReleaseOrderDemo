@@ -35,7 +35,7 @@ namespace ReleaseOrderDemo.Activities
         {
             var reserved = await _inventoryService.ReserveAsync(orderId, productId, quantity);
             if (!reserved)
-                throw new ApplicationException($"[Activity] No stock available for order {orderId}");
+                throw new InventoryUnavailableException($"[Activity] No stock available for order {orderId}");
 
             await _orderRepository.UpdateStatusAsync(orderId, "InventoryReserved");
             Console.WriteLine($"[Activity] Inventory reserved for order {orderId}");
