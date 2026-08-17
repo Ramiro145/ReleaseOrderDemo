@@ -20,10 +20,13 @@ namespace ReleaseOrderDemo.Services
 
         /// <summary>
         /// Procesa el pago de una orden.
+        /// Amount &lt;= 0 simula un rechazo del gateway (ej: monto inválido/fondos
+        /// insuficientes) para poder disparar el escenario no-reintentable desde
+        /// POST /orders sin infraestructura adicional.
         /// </summary>
         public Task<bool> ProcessAsync(int orderId, decimal amount)
         {
-            if (FailPayment)
+            if (FailPayment || amount <= 0)
             {
                 Console.WriteLine($"[PaymentService] Payment FAILED for order {orderId}");
                 return Task.FromResult(false);

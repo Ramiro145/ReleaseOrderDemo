@@ -45,7 +45,7 @@ public class ReleaseOrderWorkflow : IReleaseOrderWorkflow
             // TEMPORAL: delay de prueba para poder probar el rechazo del
             // validador del Update mientras el estado no es "Waiting for
             // release decision". Revertir luego de probar.
-            await Workflow.DelayAsync(TimeSpan.FromSeconds(10));
+            await Workflow.DelayAsync(TimeSpan.FromSeconds(3));
             var order = await Workflow.ExecuteActivityAsync(
                 (OrderLookupActivities a) => a.GetOrderAsync(orderId),
                 DefaultOptions);
