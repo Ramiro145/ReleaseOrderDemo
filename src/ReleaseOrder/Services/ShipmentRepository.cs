@@ -21,11 +21,10 @@ namespace ReleaseOrderDemo.Services
             await conn.OpenAsync();
 
             var cmd = new SqlCommand(
-                "INSERT INTO Shipments (ShipmentId, OrderId, Address, Status, CreatedAt) VALUES (@ShipmentId, @OrderId, @Address, @Status, @CreatedAt)",
+                "INSERT INTO Shipments (OrderId, Address, Status, CreatedAt) VALUES (@OrderId, @Address, @Status, @CreatedAt)",
                 conn
             );
 
-            cmd.Parameters.AddWithValue("@ShipmentId", shipment.ShipmentId);
             cmd.Parameters.AddWithValue("@OrderId", shipment.OrderId);
             cmd.Parameters.AddWithValue("@Address", shipment.Address);
             cmd.Parameters.AddWithValue("@Status", shipment.Status);
@@ -34,7 +33,7 @@ namespace ReleaseOrderDemo.Services
             await cmd.ExecuteNonQueryAsync();
         }
 
-        public async Task UpdateStatusAsync(Guid shipmentId, string status)
+        public async Task UpdateStatusAsync(int shipmentId, string status)
         {
             using var conn = new SqlConnection(_connectionString);
             await conn.OpenAsync();

@@ -46,13 +46,17 @@ worker mode, which workflow type gets registered.
 
 Five projects under `src/`, all targeting net8.0, referencing `Temporalio` 1.9.0:
 
-- **Contracts** — shared workflow interfaces (`IReleaseOrderWorkFlow.cs`, `IOrderReportWorkflow.cs`),
-  DTOs, and repository/service interfaces. Everything else depends on this for the workflow
-  contract shape used by both the client (OrderApi) and the worker (ReleaseOrder).
+- **Contracts** — shared workflow interfaces (`IReleaseOrderWorkFlow.cs`, `IShippingWorkflow.cs`,
+  `IOrderReportWorkflow.cs`), DTOs, and repository/service interfaces. Everything else depends on
+  this for the workflow contract shape used by both the client (OrderApi) and the worker
+  (ReleaseOrder).
 - **Common** — generic Temporal plumbing shared by all workers/clients:
-  - `WorkerHost.RunAsync<TWorkflow>(taskQueue, serviceProvider, activityTypes)` connects a
-    `TemporalClient` and runs a `TemporalWorker`, resolving each activity class from DI via
-    `GetRequiredService` (so activity classes must be registered in the DI container).
+  - `WorkerHost.RunAsync<TWorkflow>(taskQueue, serviceProvider, activityTypes, additionalWorkflowTypes)`
+    connects a `TemporalClient` and runs a `TemporalWorker`, resolving each activity class from DI
+    via `GetRequiredService` (so activity classes must be registered in the DI container).
+    `additionalWorkflowTypes` (optional) registers extra `[Workflow]` classes on the same worker —
+    used to co-locate a Child Workflow with its parent on one task queue (Child Workflows must be
+    registered on whichever worker executes them).
   - `WorkflowStarter.StartAsync<TWorkflow[,TResult]>(taskQueue, expr, idPrefix)` connects and
     starts a workflow one-shot (used by `Program.cs`'s CLI `create`/`release` modes, not by the API).
   - `WorkflowValidator.ValidateWorkflowAsync` — `DescribeAsync` wrapper used by OrderApi's status
@@ -69,10 +73,18 @@ Five projects under `src/`, all targeting net8.0, referencing `Temporalio` 1.9.0
     `[WorkflowUpdateValidator] ValidateSubmitReleaseDecisionUpdate` synchronously before being
     accepted: it rejects (no event written, caller gets the error immediately) unless
     `_status == "Waiting for release decision"` — the Signal path has no equivalent guard and is
-    always accepted. On approval, marks the order `Completed`; on rejection or any thrown
-    exception, unwinds the compensation stack LIFO and marks the order
-    `Compensated`/`CompensationFailed`/`Failed`. `[WorkflowQuery] GetStatus()` exposes the current
-    step string for polling from the API.
+    always accepted. On approval, marks the order `Completed`, then starts `ShippingWorkflow` as a
+    **Child Workflow** (`Workflow.ExecuteChildWorkflowAsync`, child Workflow Id
+    `shipping-order-{orderId}`) to ship the order — still inside the same `try`, so if the child
+    exhausts its own retries and fails, that exception is caught exactly like an Activity failure
+    and unwinds the same compensation stack; on rejection or any other thrown exception, unwinds
+    the compensation stack LIFO and marks the order `Compensated`/`CompensationFailed`/`Failed`.
+    `[WorkflowQuery] GetStatus()` exposes the current step string for polling from the API.
+  - `Workflows/ShippingWorkflow.cs` — the Child Workflow started by `ReleaseOrderWorkFlow.cs` on
+    approval. Single step: runs `ShippingActivities.ShipOrderAsync` with its own `ActivityOptions`
+    (independent retry policy from the parent). Registered on the same worker/task queue as
+    `ReleaseOrderWorkflow` via `additionalWorkflowTypes` in `Program.cs` — Temporal requires a
+    Child Workflow's type to be registered on whatever worker ends up executing it.
   - `Activities/PaymentActivities.cs` — `ProcessPaymentAsync` doubles as the demo's example of
     Temporal retry semantics, keyed off the order `Amount` so both paths are reachable from
     `POST /orders` with no extra plumbing: `Amount == TransientFailureAmount` (999999) throws a
@@ -98,6 +110,12 @@ Five projects under `src/`, all targeting net8.0, referencing `Temporalio` 1.9.0
   - `Activities/*` — `InventoryActivities`, `PaymentActivities`, `ShippingActivities`,
     `OrderStatusActivities`, `OrderLookupActivities`, each backed by an `Services/*` implementation
     (`*Repository`/`*Service`) talking to SQL Server via `Microsoft.Data.SqlClient`.
+    `ShippingActivities.ShipOrderAsync` (invoked only from the `ShippingWorkflow` Child Workflow)
+    has the same magic-value convention as `PaymentActivities`: in `ShippingService.ShipAsync`, an
+    order `Address` containing `"FAIL"` (case-insensitive) simulates a failed dispatch — the
+    Activity throws, the Child Workflow's own retries run out, and the failure propagates to
+    `ReleaseOrderWorkFlow.cs` to demonstrate a Child Workflow failure triggering the parent SAGA's
+    compensation.
   - Activities are registered with their concrete type in DI and passed to `WorkerHost.RunAsync`
     by type list (see `Program.cs`) — don't register by interface only, `WorkerHost` resolves the
     concrete `Type` objects directly.

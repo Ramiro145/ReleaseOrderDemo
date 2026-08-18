@@ -37,7 +37,11 @@ namespace ReleaseOrderDemo
                     };
 
                     if (workerName == "release")
-                        await WorkerHost.RunAsync<ReleaseOrderWorkflow>(taskQueue, provider, activityTypes);
+                        await WorkerHost.RunAsync<ReleaseOrderWorkflow>(
+                            taskQueue,
+                            provider,
+                            activityTypes,
+                            additionalWorkflowTypes: new[] { typeof(ShippingWorkflow) });
                     else
                         await WorkerHost.RunAsync<CrearOrdenWorkflow>(taskQueue, provider, activityTypes);
 

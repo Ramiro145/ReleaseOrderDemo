@@ -154,7 +154,7 @@ En el Event History de ambas órdenes identifica:
 2. El momento en que el Workflow queda abierto.
 3. `WorkflowExecutionSignaled` y el contenido de `ReleaseDecision`.
 4. La nueva Workflow Task creada por la Signal.
-5. En aprobación: `UpdateOrderStatus(Completed)`.
+5. En aprobación: `UpdateOrderStatus(Completed)` y el Child Workflow de envío.
 6. En rechazo: `RefundPayment`, `CancelInventory` y estado `Compensated`.
 
 Usa una orden diferente para cada recorrido porque el Workflow ID es estable:
@@ -163,8 +163,49 @@ Usa una orden diferente para cada recorrido porque el Workflow ID es estable:
 release-order-{orderId}
 ```
 
+## Prueba C: Child Workflow de envío (éxito y fallo)
+
+Tras aprobar la Signal, `ReleaseOrderWorkflow` (parent) inicia `ShippingWorkflow`
+(child) para despachar la orden — un Workflow Execution independiente, con su
+propio Workflow Id y Event History, anidado bajo el parent en Temporal UI.
+
+### C.1 — Envío exitoso
+
+Repite la Prueba A (Signal aprobada) con una orden cuyo `Address` no contenga
+la palabra `FAIL`. Resultado esperado:
+
+```text
+Workflow: Completed
+Orden: Completed
+```
+
+En Temporal UI, dentro del Workflow `release-order-{orderId}` verás un evento
+`StartChildWorkflowExecutionInitiated` y podrás navegar al Child Workflow
+`shipping-order-{orderId}`, con su propia ejecución de la Activity
+`ShipOrderAsync`.
+
+### C.2 — Fallo del Child Workflow → compensación completa
+
+Crea una orden con un `Address` que contenga `FAIL` (por ejemplo
+`"FAIL - Calle de prueba"`) y repite la Prueba A. `ShippingService.ShipAsync`
+simulará un despacho fallido; la Activity del child reintenta según su propia
+`RetryPolicy` y, al agotarla, el Child Workflow falla. Esa falla propaga hacia
+`ReleaseOrderWorkflow`, que dispara la misma compensación LIFO que un fallo de
+Activity (`RefundPayment` → `CancelInventory`).
+
+Resultado esperado:
+
+```text
+Workflow: Completed
+Orden: Compensated
+```
+
+Esto demuestra que el SAGA del parent no distingue entre un fallo de Activity
+propia y un fallo propagado desde un Child Workflow: ambos son simplemente una
+excepción dentro del mismo `try`.
+
 ## Alcance intencional
 
-Esta versión no agrega todavía Updates, Child Workflows, timers ni pruebas de
-replay. El objetivo es comprender completamente una Signal antes de incorporar
+Esta versión no agrega todavía timers ni pruebas de replay. El objetivo es
+comprender completamente Signal, Update y Child Workflow antes de incorporar
 otra capacidad de Temporal.

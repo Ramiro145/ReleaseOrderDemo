@@ -5,5 +5,5 @@ namespace Contracts.Repositories;
 public interface IShipmentRepository
 {
     Task InsertAsync(ShipmentDto shipment);
-    Task UpdateStatusAsync(Guid shipmentId, string status);
+    Task UpdateStatusAsync(int shipmentId, string status);
 }

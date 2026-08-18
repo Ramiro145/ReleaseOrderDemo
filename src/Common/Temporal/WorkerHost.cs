@@ -18,6 +18,7 @@ namespace Common
             string taskQueue,
             IServiceProvider serviceProvider,
             IEnumerable<Type> activityTypes,
+            IEnumerable<Type>? additionalWorkflowTypes = null,
             CancellationToken cancellationToken = default)
             where TWorkflow : class
         {
@@ -30,6 +31,12 @@ namespace Common
 
             var options = new TemporalWorkerOptions(taskQueue)
                 .AddWorkflow<TWorkflow>();
+
+            // Child Workflows deben registrarse en el mismo Worker que los ejecuta
+            // (aquí, la misma task queue del parent) para que puedan resolverse.
+            if (additionalWorkflowTypes is not null)
+                foreach (var workflowType in additionalWorkflowTypes)
+                    options.AddWorkflow(workflowType);
 
             foreach (var activityType in activityTypes)
             {
