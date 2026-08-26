@@ -3,6 +3,7 @@ import type { FormEvent } from 'react'
 import { createOrder } from '../api/orders'
 import { ApiError } from '../api/client'
 import { ErrorBanner } from './ErrorBanner'
+import { Button } from './ui/Button'
 
 interface CreateOrderFormProps {
   onOrderCreated: () => void
@@ -56,10 +57,9 @@ export function CreateOrderForm({ onOrderCreated }: CreateOrderFormProps) {
   }
 
   return (
-    <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-      <h2 className="text-lg font-semibold text-slate-900">Crear orden</h2>
+    <div>
       <ErrorBanner error={error} />
-      <form onSubmit={handleSubmit} className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+      <form onSubmit={handleSubmit} className="mt-1 grid grid-cols-1 gap-3 sm:grid-cols-2">
         <label className="block text-sm font-medium text-slate-700">
           Código
           <input className={inputClass} value={form.orderCode} onChange={(e) => update('orderCode', e.target.value)} />
@@ -96,15 +96,11 @@ export function CreateOrderForm({ onOrderCreated }: CreateOrderFormProps) {
           <input className={inputClass} value={form.address} onChange={(e) => update('address', e.target.value)} />
         </label>
         <div className="sm:col-span-2">
-          <button
-            type="submit"
-            disabled={submitting}
-            className="rounded-md bg-indigo-600 px-4 py-1.5 text-sm font-medium text-white transition hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {submitting ? 'Creando...' : 'Crear orden'}
-          </button>
+          <Button type="submit" variant="primary" loading={submitting} loadingLabel="Creando...">
+            Crear orden
+          </Button>
         </div>
       </form>
-    </section>
+    </div>
   )
 }

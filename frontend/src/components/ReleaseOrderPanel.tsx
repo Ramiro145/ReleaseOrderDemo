@@ -7,18 +7,19 @@ import {
 } from '../api/orders'
 import { ApiError } from '../api/client'
 import { ErrorBanner } from './ErrorBanner'
-import { useOrderStatus } from '../hooks/useOrderStatus'
+import { Button } from './ui/Button'
 
 type DecisionMechanism = 'signal' | 'update'
 
 interface ReleaseOrderPanelProps {
   orderId: number
+  onAfterAction: () => void
 }
 
 const inputClass =
   'mt-1 w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm text-slate-900 shadow-sm outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100'
 
-export function ReleaseOrderPanel({ orderId }: ReleaseOrderPanelProps) {
+export function ReleaseOrderPanel({ orderId, onAfterAction }: ReleaseOrderPanelProps) {
   const [releaseError, setReleaseError] = useState<ApiError | null>(null)
   const [releasing, setReleasing] = useState(false)
   const [releaseInfo, setReleaseInfo] = useState<string | null>(null)
@@ -30,8 +31,6 @@ export function ReleaseOrderPanel({ orderId }: ReleaseOrderPanelProps) {
   const [decisionInfo, setDecisionInfo] = useState<string | null>(null)
   const [sendingDecision, setSendingDecision] = useState(false)
 
-  const { status, error: statusError, polling, restart: restartPolling } = useOrderStatus(orderId, true)
-
   async function handleRelease() {
     setReleaseError(null)
     setReleaseInfo(null)
@@ -39,7 +38,7 @@ export function ReleaseOrderPanel({ orderId }: ReleaseOrderPanelProps) {
     try {
       const result = await releaseOrder(orderId)
       setReleaseInfo(`Workflow iniciado: ${result.workflowId}`)
-      restartPolling()
+      onAfterAction()
     } catch (err) {
       setReleaseError(err instanceof ApiError ? err : new ApiError(0, 'Error inesperado', err))
     } finally {
@@ -61,7 +60,7 @@ export function ReleaseOrderPanel({ orderId }: ReleaseOrderPanelProps) {
         const result = await sendReleaseDecisionUpdate(orderId, decision)
         setDecisionInfo(`Decisión enviada por Update. Resultado: ${result.result}`)
       }
-      restartPolling()
+      onAfterAction()
     } catch (err) {
       setDecisionError(err instanceof ApiError ? err : new ApiError(0, 'Error inesperado', err))
     } finally {
@@ -70,34 +69,12 @@ export function ReleaseOrderPanel({ orderId }: ReleaseOrderPanelProps) {
   }
 
   return (
-    <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-      <h2 className="text-lg font-semibold text-slate-900">Liberar orden #{orderId}</h2>
-
-      <div className="mt-3 flex items-center gap-2 rounded-md bg-slate-50 px-3 py-2 text-sm">
-        <span className="font-medium text-slate-700">Estado del workflow:</span>
-        {status ? (
-          <span className="text-slate-600">
-            {status.status} ({status.state}){' '}
-            <span className={polling ? 'text-emerald-600' : 'text-slate-400'}>
-              {polling ? '— actualizando...' : '— detenido'}
-            </span>
-          </span>
-        ) : (
-          <span className="text-slate-400">sin datos aún</span>
-        )}
-      </div>
-      <ErrorBanner error={statusError} />
-
+    <div>
       <ErrorBanner error={releaseError} />
       {releaseInfo && <p className="mt-2 text-sm text-emerald-700">{releaseInfo}</p>}
-      <button
-        type="button"
-        onClick={handleRelease}
-        disabled={releasing}
-        className="mt-3 rounded-md bg-slate-900 px-4 py-1.5 text-sm font-medium text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
-      >
-        {releasing ? 'Liberando...' : 'Liberar orden'}
-      </button>
+      <Button onClick={handleRelease} loading={releasing} loadingLabel="Liberando...">
+        Liberar orden
+      </Button>
 
       <h3 className="mt-6 text-sm font-semibold uppercase tracking-wide text-slate-500">
         Decisión de release
@@ -142,14 +119,16 @@ export function ReleaseOrderPanel({ orderId }: ReleaseOrderPanelProps) {
           Motivo
           <input className={inputClass} value={reason} onChange={(e) => setReason(e.target.value)} />
         </label>
-        <button
+        <Button
           type="submit"
-          disabled={sendingDecision}
-          className="w-fit rounded-md bg-indigo-600 px-4 py-1.5 text-sm font-medium text-white transition hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-50"
+          variant="primary"
+          loading={sendingDecision}
+          loadingLabel="Enviando..."
+          className="w-fit"
         >
-          {sendingDecision ? 'Enviando...' : `Enviar decisión (${mechanism === 'signal' ? 'Signal' : 'Update'})`}
-        </button>
+          Enviar decisión ({mechanism === 'signal' ? 'Signal' : 'Update'})
+        </Button>
       </form>
-    </section>
+    </div>
   )
 }

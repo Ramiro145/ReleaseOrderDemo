@@ -1,12 +1,21 @@
 import { useState } from 'react'
 import { OrderList } from './components/OrderList'
 import { CreateOrderForm } from './components/CreateOrderForm'
-import { ReleaseOrderPanel } from './components/ReleaseOrderPanel'
-import { OrderReport } from './components/OrderReport'
+import { OrderDetailPanel } from './components/OrderDetailPanel'
+import { Modal } from './components/ui/Modal'
+import { useOrders } from './hooks/useOrders'
 
 function App() {
-  const [refreshToken, setRefreshToken] = useState(0)
+  const { orders, loading, error, refresh } = useOrders()
   const [selectedOrderId, setSelectedOrderId] = useState<number | null>(null)
+  const [isCreateOpen, setIsCreateOpen] = useState(false)
+
+  const selectedOrder = orders.find((o) => o.orderId === selectedOrderId) ?? null
+
+  function handleOrderCreated() {
+    setIsCreateOpen(false)
+    refresh()
+  }
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -23,20 +32,20 @@ function App() {
 
       <main className="mx-auto max-w-6xl px-6 py-8">
         <div className="flex flex-col gap-6 lg:flex-row lg:items-start">
-          <div className="flex min-w-0 flex-1 flex-col gap-6 lg:basis-[45%]">
-            <CreateOrderForm onOrderCreated={() => setRefreshToken((t) => t + 1)} />
+          <div className="flex min-w-0 flex-1 flex-col gap-6 lg:basis-[40%]">
             <OrderList
-              refreshToken={refreshToken}
+              orders={orders}
+              loading={loading}
+              error={error}
+              onRefresh={refresh}
+              onCreateOrder={() => setIsCreateOpen(true)}
               selectedOrderId={selectedOrderId}
               onSelectOrder={setSelectedOrderId}
             />
           </div>
-          <div className="flex min-w-0 flex-1 flex-col gap-6 lg:basis-[55%]">
-            {selectedOrderId !== null ? (
-              <>
-                <ReleaseOrderPanel orderId={selectedOrderId} />
-                <OrderReport orderId={selectedOrderId} />
-              </>
+          <div className="flex min-w-0 flex-1 flex-col gap-6 lg:basis-[60%]">
+            {selectedOrder ? (
+              <OrderDetailPanel order={selectedOrder} />
             ) : (
               <div className="rounded-lg border border-dashed border-slate-300 bg-white px-6 py-10 text-center text-sm text-slate-500">
                 Seleccioná una orden de la lista para ver sus detalles.
@@ -45,6 +54,10 @@ function App() {
           </div>
         </div>
       </main>
+
+      <Modal open={isCreateOpen} onClose={() => setIsCreateOpen(false)} title="Crear orden">
+        <CreateOrderForm onOrderCreated={handleOrderCreated} />
+      </Modal>
     </div>
   )
 }

@@ -3,6 +3,7 @@ import { getOrderReport } from '../api/orders'
 import type { OrderReportResult } from '../types/dtos'
 import { ApiError } from '../api/client'
 import { ErrorBanner } from './ErrorBanner'
+import { Button } from './ui/Button'
 
 interface OrderReportProps {
   orderId: number
@@ -28,16 +29,10 @@ export function OrderReport({ orderId }: OrderReportProps) {
   }
 
   return (
-    <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-      <h2 className="text-lg font-semibold text-slate-900">Reporte de la orden #{orderId}</h2>
-      <button
-        type="button"
-        onClick={handleFetchReport}
-        disabled={loading}
-        className="mt-3 rounded-md bg-slate-900 px-4 py-1.5 text-sm font-medium text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
-      >
-        {loading ? 'Generando...' : 'Ver reporte'}
-      </button>
+    <div>
+      <Button onClick={handleFetchReport} loading={loading} loadingLabel="Generando...">
+        Ver reporte
+      </Button>
       <ErrorBanner error={error} />
       {report && (
         <dl className="mt-4 grid grid-cols-1 gap-x-4 gap-y-2 text-sm sm:grid-cols-[auto_1fr]">
@@ -49,6 +44,6 @@ export function OrderReport({ orderId }: OrderReportProps) {
           <dd className="text-slate-800">{report.summary}</dd>
         </dl>
       )}
-    </section>
+    </div>
   )
 }
