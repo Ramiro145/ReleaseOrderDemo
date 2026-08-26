@@ -152,7 +152,8 @@ En el Event History de ambas órdenes identifica:
 
 1. Las Activities de inventario y pago.
 2. El momento en que el Workflow queda abierto.
-3. `WorkflowExecutionSignaled` y el contenido de `ReleaseDecision`.
+3. `WorkflowExecutionSignaled` (o `WorkflowExecutionUpdateAccepted` si usaste
+   `/decision-update`, ver Prueba D) y el contenido de `ReleaseDecision`.
 4. La nueva Workflow Task creada por la Signal.
 5. En aprobación: `UpdateOrderStatus(Completed)` y el Child Workflow de envío.
 6. En rechazo: `RefundPayment`, `CancelInventory` y estado `Compensated`.
@@ -203,6 +204,63 @@ Orden: Compensated
 Esto demuestra que el SAGA del parent no distingue entre un fallo de Activity
 propia y un fallo propagado desde un Child Workflow: ambos son simplemente una
 excepción dentro del mismo `try`.
+
+## Prueba D: decisión vía Update (en vez de Signal)
+
+`POST /orders/{orderId}/release/decision-update` envía la misma `ReleaseDecision`
+pero como `[WorkflowUpdate]` en lugar de Signal, usando `ExecuteUpdateAsync`.
+Diferencias observables frente a la Prueba A/B:
+
+- La llamada HTTP espera el resultado de forma síncrona (la Signal solo
+  confirma `Accepted`, sin resultado de negocio).
+- El Update corre `ValidateSubmitReleaseDecisionUpdate` (`[WorkflowUpdateValidator]`)
+  antes de aceptarse: si el Workflow no está en `"Waiting for release decision"`
+  (por ejemplo, si ya se envió una decisión antes), lo rechaza sin escribir
+  evento en el Event History y la API responde `400` con el error de
+  `WorkflowUpdateFailedException`. La Signal no tiene este validador — siempre
+  se acepta.
+- Si el Workflow no existe, la API responde `404` (`WorkflowValidator` lo
+  detecta antes de llamar al Update).
+- Signal y Update comparten el mismo estado de decisión interno: cualquiera de
+  los dos que llegue primero gana, y el otro queda sin efecto (protección ante
+  duplicados o ante enviar ambos).
+
+Repite la Prueba A o B pero usando `/decision-update` en el paso 4 para
+comparar el Event History (`WorkflowExecutionUpdateAccepted`/`Completed` en vez
+de `WorkflowExecutionSignaled`).
+
+## Prueba E: errores reintentables vs. no-reintentables
+
+Dos formas de marcar un error como no-reintentable en Temporal, contrastadas
+con el caso reintentable por defecto:
+
+### E.1 — Pago: error reintentable (timeout transitorio simulado)
+
+Crea una orden con `Amount = 999999` y libérala (Prueba A). `PaymentActivities.ProcessPaymentAsync`
+lanza una `ApplicationException` genérica simulando un timeout de gateway.
+Temporal la trata como reintentable y agota los `MaximumAttempts` (3, con
+backoff) de `DefaultOptions` antes de que el SAGA compense. En el Event
+History verás múltiples `ActivityTaskStarted`/`ActivityTaskFailed` para
+`ProcessPaymentAsync` antes de `RefundPayment`/`CancelInventory`.
+
+### E.2 — Pago: error no-reintentable desde la Activity
+
+Crea una orden con `Amount <= 0` y libérala. `PaymentService.ProcessAsync`
+devuelve `false` (gateway declina) y la Activity lanza
+`Temporalio.Exceptions.ApplicationFailureException` con `nonRetryable: true`.
+Temporal no reintenta: la compensación arranca en el primer intento fallido.
+Contrasta el único `ActivityTaskFailed` aquí contra los múltiples de E.1.
+
+### E.3 — Inventario: error no-reintentable decidido por el Workflow
+
+Crea una orden con `Quantity` mayor al `Stock` sembrado para ese `productId` en
+`Products` y libérala. `InventoryActivities.ReserveInventoryAsync` lanza
+`InventoryUnavailableException`, una excepción simple sin conocimiento de
+Temporal. Es `ReleaseOrderWorkflow` quien decide que no debe reintentarse:
+`InventoryReserveOptions` incluye `nameof(InventoryUnavailableException)` en
+`RetryPolicy.NonRetryableErrorTypes`. Esto muestra la alternativa a E.2: en vez
+de que la Activity se marque a sí misma como no-reintentable, es el Workflow
+quien decide por tipo de excepción.
 
 ## Alcance intencional
 
