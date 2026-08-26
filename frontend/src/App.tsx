@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { OrderList } from './components/OrderList'
 import { CreateOrderForm } from './components/CreateOrderForm'
 import { ReleaseOrderPanel } from './components/ReleaseOrderPanel'
+import { OrderReport } from './components/OrderReport'
 
 function App() {
   const [refreshToken, setRefreshToken] = useState(0)
@@ -16,7 +17,12 @@ function App() {
         selectedOrderId={selectedOrderId}
         onSelectOrder={setSelectedOrderId}
       />
-      {selectedOrderId !== null && <ReleaseOrderPanel orderId={selectedOrderId} />}
+      {selectedOrderId !== null && (
+        <>
+          <ReleaseOrderPanel orderId={selectedOrderId} />
+          <OrderReport orderId={selectedOrderId} />
+        </>
+      )}
     </main>
   )
 }
