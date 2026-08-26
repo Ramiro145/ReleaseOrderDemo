@@ -12,16 +12,9 @@ export function ErrorBanner({ error }: ErrorBannerProps) {
   return (
     <div
       role="alert"
-      style={{
-        border: '1px solid #c00',
-        background: '#fee',
-        color: '#900',
-        padding: '8px 12px',
-        margin: '8px 0',
-        borderRadius: 4,
-      }}
+      className="my-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700"
     >
-      <strong>{label}:</strong> {error.message}
+      <strong className="font-semibold">{label}:</strong> {error.message}
     </div>
   )
 }

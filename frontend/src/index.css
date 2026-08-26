@@ -1,47 +1,9 @@
-:root {
-  color-scheme: light dark;
-  font-family: system-ui, 'Segoe UI', Roboto, sans-serif;
-}
+@import "tailwindcss";
 
-* {
-  box-sizing: border-box;
+@theme {
+  --font-sans: 'Segoe UI', system-ui, Roboto, sans-serif;
 }
 
 body {
-  margin: 0;
-}
-
-#root {
-  max-width: 1100px;
-  margin: 0 auto;
-  padding: 16px;
-}
-
-section {
-  border: 1px solid #ccc;
-  border-radius: 6px;
-  padding: 12px 16px;
-  margin-bottom: 16px;
-}
-
-.layout {
-  display: flex;
-  gap: 24px;
-  align-items: flex-start;
-}
-
-.layout-left {
-  flex: 1 1 45%;
-  min-width: 0;
-}
-
-.layout-right {
-  flex: 1 1 55%;
-  min-width: 0;
-}
-
-@media (max-width: 800px) {
-  .layout {
-    flex-direction: column;
-  }
+  @apply bg-slate-50 text-slate-900;
 }

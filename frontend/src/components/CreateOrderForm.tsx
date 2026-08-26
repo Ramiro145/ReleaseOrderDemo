@@ -16,6 +16,9 @@ const emptyForm = {
   address: '',
 }
 
+const inputClass =
+  'mt-1 w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm text-slate-900 shadow-sm outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100'
+
 export function CreateOrderForm({ onOrderCreated }: CreateOrderFormProps) {
   const [form, setForm] = useState(emptyForm)
   const [error, setError] = useState<ApiError | null>(null)
@@ -53,47 +56,54 @@ export function CreateOrderForm({ onOrderCreated }: CreateOrderFormProps) {
   }
 
   return (
-    <section>
-      <h2>Crear orden</h2>
+    <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+      <h2 className="text-lg font-semibold text-slate-900">Crear orden</h2>
       <ErrorBanner error={error} />
-      <form onSubmit={handleSubmit}>
-        <div>
-          <label>
-            Código
-            <input value={form.orderCode} onChange={(e) => update('orderCode', e.target.value)} />
-          </label>
+      <form onSubmit={handleSubmit} className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <label className="block text-sm font-medium text-slate-700">
+          Código
+          <input className={inputClass} value={form.orderCode} onChange={(e) => update('orderCode', e.target.value)} />
+        </label>
+        <label className="block text-sm font-medium text-slate-700">
+          Producto (ProductId)
+          <input
+            className={inputClass}
+            type="number"
+            value={form.productId}
+            onChange={(e) => update('productId', e.target.value)}
+          />
+        </label>
+        <label className="block text-sm font-medium text-slate-700">
+          Cantidad
+          <input
+            className={inputClass}
+            type="number"
+            value={form.quantity}
+            onChange={(e) => update('quantity', e.target.value)}
+          />
+        </label>
+        <label className="block text-sm font-medium text-slate-700">
+          Monto
+          <input
+            className={inputClass}
+            type="number"
+            value={form.amount}
+            onChange={(e) => update('amount', e.target.value)}
+          />
+        </label>
+        <label className="block text-sm font-medium text-slate-700 sm:col-span-2">
+          Dirección
+          <input className={inputClass} value={form.address} onChange={(e) => update('address', e.target.value)} />
+        </label>
+        <div className="sm:col-span-2">
+          <button
+            type="submit"
+            disabled={submitting}
+            className="rounded-md bg-indigo-600 px-4 py-1.5 text-sm font-medium text-white transition hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {submitting ? 'Creando...' : 'Crear orden'}
+          </button>
         </div>
-        <div>
-          <label>
-            Producto (ProductId)
-            <input
-              type="number"
-              value={form.productId}
-              onChange={(e) => update('productId', e.target.value)}
-            />
-          </label>
-        </div>
-        <div>
-          <label>
-            Cantidad
-            <input type="number" value={form.quantity} onChange={(e) => update('quantity', e.target.value)} />
-          </label>
-        </div>
-        <div>
-          <label>
-            Monto
-            <input type="number" value={form.amount} onChange={(e) => update('amount', e.target.value)} />
-          </label>
-        </div>
-        <div>
-          <label>
-            Dirección
-            <input value={form.address} onChange={(e) => update('address', e.target.value)} />
-          </label>
-        </div>
-        <button type="submit" disabled={submitting}>
-          {submitting ? 'Creando...' : 'Crear orden'}
-        </button>
       </form>
     </section>
   )

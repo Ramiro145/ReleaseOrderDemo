@@ -9,29 +9,43 @@ function App() {
   const [selectedOrderId, setSelectedOrderId] = useState<number | null>(null)
 
   return (
-    <main>
-      <h1>ReleaseOrder Demo</h1>
-      <div className="layout">
-        <div className="layout-left">
-          <CreateOrderForm onOrderCreated={() => setRefreshToken((t) => t + 1)} />
-          <OrderList
-            refreshToken={refreshToken}
-            selectedOrderId={selectedOrderId}
-            onSelectOrder={setSelectedOrderId}
-          />
+    <div className="min-h-screen bg-slate-50">
+      <header className="border-b border-slate-200 bg-white">
+        <div className="mx-auto max-w-6xl px-6 py-5">
+          <h1 className="text-2xl font-semibold tracking-tight text-slate-900">
+            ReleaseOrder Demo
+          </h1>
+          <p className="mt-1 text-sm text-slate-500">
+            Temporal.io — SAGA, Signals y Updates sobre .NET 8
+          </p>
         </div>
-        <div className="layout-right">
-          {selectedOrderId !== null ? (
-            <>
-              <ReleaseOrderPanel orderId={selectedOrderId} />
-              <OrderReport orderId={selectedOrderId} />
-            </>
-          ) : (
-            <p>Seleccioná una orden de la lista para ver sus detalles.</p>
-          )}
+      </header>
+
+      <main className="mx-auto max-w-6xl px-6 py-8">
+        <div className="flex flex-col gap-6 lg:flex-row lg:items-start">
+          <div className="flex min-w-0 flex-1 flex-col gap-6 lg:basis-[45%]">
+            <CreateOrderForm onOrderCreated={() => setRefreshToken((t) => t + 1)} />
+            <OrderList
+              refreshToken={refreshToken}
+              selectedOrderId={selectedOrderId}
+              onSelectOrder={setSelectedOrderId}
+            />
+          </div>
+          <div className="flex min-w-0 flex-1 flex-col gap-6 lg:basis-[55%]">
+            {selectedOrderId !== null ? (
+              <>
+                <ReleaseOrderPanel orderId={selectedOrderId} />
+                <OrderReport orderId={selectedOrderId} />
+              </>
+            ) : (
+              <div className="rounded-lg border border-dashed border-slate-300 bg-white px-6 py-10 text-center text-sm text-slate-500">
+                Seleccioná una orden de la lista para ver sus detalles.
+              </div>
+            )}
+          </div>
         </div>
-      </div>
-    </main>
+      </main>
+    </div>
   )
 }
 
