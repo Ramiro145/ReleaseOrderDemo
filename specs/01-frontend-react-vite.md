@@ -1,6 +1,6 @@
 # 01 - Frontend React/Vite para el demo de Temporal
 
-**Estado:** Aprobado
+**Estado:** Implementado
 **Depende de:** -
 **Fecha:** 2026-08-26
 
