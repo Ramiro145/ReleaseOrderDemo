@@ -7,6 +7,7 @@ import {
 } from '../api/orders'
 import { ApiError } from '../api/client'
 import { ErrorBanner } from './ErrorBanner'
+import { useOrderStatus } from '../hooks/useOrderStatus'
 
 type DecisionMechanism = 'signal' | 'update'
 
@@ -26,6 +27,8 @@ export function ReleaseOrderPanel({ orderId }: ReleaseOrderPanelProps) {
   const [decisionInfo, setDecisionInfo] = useState<string | null>(null)
   const [sendingDecision, setSendingDecision] = useState(false)
 
+  const { status, error: statusError, polling, restart: restartPolling } = useOrderStatus(orderId, true)
+
   async function handleRelease() {
     setReleaseError(null)
     setReleaseInfo(null)
@@ -33,6 +36,7 @@ export function ReleaseOrderPanel({ orderId }: ReleaseOrderPanelProps) {
     try {
       const result = await releaseOrder(orderId)
       setReleaseInfo(`Workflow iniciado: ${result.workflowId}`)
+      restartPolling()
     } catch (err) {
       setReleaseError(err instanceof ApiError ? err : new ApiError(0, 'Error inesperado', err))
     } finally {
@@ -54,6 +58,7 @@ export function ReleaseOrderPanel({ orderId }: ReleaseOrderPanelProps) {
         const result = await sendReleaseDecisionUpdate(orderId, decision)
         setDecisionInfo(`Decisión enviada por Update. Resultado: ${result.result}`)
       }
+      restartPolling()
     } catch (err) {
       setDecisionError(err instanceof ApiError ? err : new ApiError(0, 'Error inesperado', err))
     } finally {
@@ -64,6 +69,18 @@ export function ReleaseOrderPanel({ orderId }: ReleaseOrderPanelProps) {
   return (
     <section>
       <h2>Liberar orden #{orderId}</h2>
+
+      <div>
+        <strong>Estado del workflow:</strong>{' '}
+        {status ? (
+          <span>
+            {status.status} ({status.state}) {polling ? '— actualizando...' : '— detenido'}
+          </span>
+        ) : (
+          <span>sin datos aún</span>
+        )}
+      </div>
+      <ErrorBanner error={statusError} />
 
       <ErrorBanner error={releaseError} />
       {releaseInfo && <p>{releaseInfo}</p>}
