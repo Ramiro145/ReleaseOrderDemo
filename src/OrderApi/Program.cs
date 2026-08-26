@@ -13,6 +13,20 @@ var builder = WebApplication.CreateBuilder(args);
 var connectionString = builder.Configuration.GetConnectionString("OrdersDb");
 builder.Services.AddTransient(_ => new SqlConnection(connectionString));
 
+// CORS: permite que el frontend (Vite dev server, otro origen) invoque la API.
+const string FrontendCorsPolicy = "FrontendCorsPolicy";
+var allowedOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>()
+    ?? new[] { "http://localhost:5173" };
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy(FrontendCorsPolicy, policy =>
+    {
+        policy.WithOrigins(allowedOrigins)
+              .AllowAnyHeader()
+              .AllowAnyMethod();
+    });
+});
+
 // Configurar cliente Temporal
 builder.Services.AddSingleton(sp =>
 {
@@ -51,6 +65,8 @@ app.UseSwaggerUI(c =>
     c.SwaggerEndpoint("/swagger/v1/swagger.json", "Order API v1");
     c.RoutePrefix = "swagger"; // UI en http://localhost:5000/swagger
 });
+
+app.UseCors(FrontendCorsPolicy);
 
 // Middleware opcional
 // app.UseHttpsRedirection();
