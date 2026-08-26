@@ -119,16 +119,16 @@ frontend/
 
 ## Criterios de aceptación
 
-- [ ] `frontend/` existe en la raíz del repo con una app Vite + React + TypeScript funcional (`npm install && npm run dev` levanta el dev server sin errores).
-- [ ] La URL de OrderApi es configurable vía `VITE_API_URL` (variable de entorno / `.env`), con `.env.example` documentado.
-- [ ] `OrderApi` acepta requests CORS desde el origen del dev server de Vite sin romper Swagger ni el resto de endpoints.
-- [ ] Se puede crear una orden desde la UI y verla aparecer en el listado (`GET /orders`).
-- [ ] Se puede liberar una orden desde la UI (`POST /orders/{id}/release`) y ver su estado cambiar vía polling automático.
-- [ ] Se puede enviar una decisión de release tanto por Signal como por Update, eligiendo el mecanismo desde un selector en la UI, y el resultado (aprobado/rechazado) se refleja en el estado consultado.
-- [ ] El polling de estado se detiene automáticamente al llegar a un estado terminal (`Completed`, `Compensated`, `CompensationFailed`, `Failed`).
-- [ ] Consultar un `orderId` inexistente o un workflow no iniciado muestra un mensaje de error legible en la UI, sin romper la pantalla.
-- [ ] Se puede ver el reporte de una orden (`GET /reports/{orderId}`) desde la UI.
-- [ ] Se reproducen manualmente, desde la UI, los dos escenarios de prueba descritos en el README (Signal aprobada y Signal rechazada).
+- [x] `frontend/` existe en la raíz del repo con una app Vite + React + TypeScript funcional (`npm install && npm run dev` levanta el dev server sin errores).
+- [x] La URL de OrderApi es configurable vía `VITE_API_URL` (variable de entorno / `.env`), con `.env.example` documentado.
+- [x] `OrderApi` acepta requests CORS desde el origen del dev server de Vite sin romper Swagger ni el resto de endpoints.
+- [x] Se puede crear una orden desde la UI y verla aparecer en el listado (`GET /orders`).
+- [x] Se puede liberar una orden desde la UI (`POST /orders/{id}/release`) y ver su estado cambiar vía polling automático.
+- [x] Se puede enviar una decisión de release tanto por Signal como por Update, eligiendo el mecanismo desde un selector en la UI, y el resultado (aprobado/rechazado) se refleja en el estado consultado.
+- [x] El polling de estado se detiene automáticamente al llegar a un estado terminal (`Completed`, `Compensated`, `CompensationFailed`, `Failed`).
+- [x] Consultar un `orderId` inexistente o un workflow no iniciado muestra un mensaje de error legible en la UI, sin romper la pantalla.
+- [x] Se puede ver el reporte de una orden (`GET /reports/{orderId}`) desde la UI.
+- [x] Se reproducen manualmente, desde la UI, los dos escenarios de prueba descritos en el README (Signal aprobada y Signal rechazada).
 
 ## Decisiones tomadas y descartadas
 

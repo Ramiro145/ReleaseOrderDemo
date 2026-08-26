@@ -11,18 +11,26 @@ function App() {
   return (
     <main>
       <h1>ReleaseOrder Demo</h1>
-      <CreateOrderForm onOrderCreated={() => setRefreshToken((t) => t + 1)} />
-      <OrderList
-        refreshToken={refreshToken}
-        selectedOrderId={selectedOrderId}
-        onSelectOrder={setSelectedOrderId}
-      />
-      {selectedOrderId !== null && (
-        <>
-          <ReleaseOrderPanel orderId={selectedOrderId} />
-          <OrderReport orderId={selectedOrderId} />
-        </>
-      )}
+      <div className="layout">
+        <div className="layout-left">
+          <CreateOrderForm onOrderCreated={() => setRefreshToken((t) => t + 1)} />
+          <OrderList
+            refreshToken={refreshToken}
+            selectedOrderId={selectedOrderId}
+            onSelectOrder={setSelectedOrderId}
+          />
+        </div>
+        <div className="layout-right">
+          {selectedOrderId !== null ? (
+            <>
+              <ReleaseOrderPanel orderId={selectedOrderId} />
+              <OrderReport orderId={selectedOrderId} />
+            </>
+          ) : (
+            <p>Seleccioná una orden de la lista para ver sus detalles.</p>
+          )}
+        </div>
+      </div>
     </main>
   )
 }
