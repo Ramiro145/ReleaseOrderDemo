@@ -1,6 +1,6 @@
 import type { ButtonHTMLAttributes } from 'react'
 
-type Variant = 'primary' | 'neutral' | 'ghost'
+type Variant = 'primary' | 'danger' | 'quiet'
 
 interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: Variant
@@ -8,14 +8,17 @@ interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   loadingLabel?: string
 }
 
+// Pensados para vivir sobre el mostrador oscuro. Los botones del ticket
+// (Confirmar / Rechazar) se estilan aparte en DecisionGate, sobre papel.
 const VARIANT_CLASSES: Record<Variant, string> = {
-  primary: 'bg-indigo-600 text-white hover:bg-indigo-500',
-  neutral: 'bg-slate-900 text-white hover:bg-slate-700',
-  ghost: 'bg-white text-slate-700 ring-1 ring-inset ring-slate-300 hover:bg-slate-50',
+  primary: 'bg-ledger text-paper hover:bg-ledger-bright',
+  danger: 'bg-inkred text-paper hover:bg-inkred-bright',
+  quiet:
+    'bg-transparent text-paper/75 ring-1 ring-inset ring-counter-line hover:bg-white/5 hover:text-paper',
 }
 
 export function Button({
-  variant = 'neutral',
+  variant = 'quiet',
   loading = false,
   loadingLabel,
   disabled,
@@ -27,10 +30,10 @@ export function Button({
     <button
       type="button"
       disabled={disabled || loading}
-      className={`rounded-md px-4 py-1.5 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-50 ${VARIANT_CLASSES[variant]} ${className}`}
+      className={`inline-flex cursor-pointer items-center justify-center gap-2 rounded-md px-4 py-2 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-45 ${VARIANT_CLASSES[variant]} ${className}`}
       {...rest}
     >
-      {loading ? loadingLabel ?? children : children}
+      {loading ? (loadingLabel ?? children) : children}
     </button>
   )
 }

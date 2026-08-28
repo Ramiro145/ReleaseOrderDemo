@@ -6,11 +6,20 @@ import type { OrderStatusResponse } from '../types/dtos'
 const TERMINAL_STATES = ['Completed', 'Compensated', 'CompensationFailed', 'Failed']
 const POLL_INTERVAL_MS = 2500
 
-export function useOrderStatus(orderId: number, active: boolean) {
+export function useOrderStatus(
+  orderId: number,
+  active: boolean,
+  onResult?: (result: OrderStatusResponse) => void,
+) {
   const [status, setStatus] = useState<OrderStatusResponse | null>(null)
   const [error, setError] = useState<ApiError | null>(null)
   const [polling, setPolling] = useState(false)
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // El callback puede cambiar de identidad entre renders; lo leemos por ref
+  // para no reiniciar el polling.
+  const onResultRef = useRef(onResult)
+  onResultRef.current = onResult
 
   function stop() {
     if (timerRef.current) {
@@ -25,6 +34,7 @@ export function useOrderStatus(orderId: number, active: boolean) {
       const result = await getOrderStatus(orderId)
       setStatus(result)
       setError(null)
+      onResultRef.current?.(result)
       if (TERMINAL_STATES.includes(result.status)) {
         stop()
         return

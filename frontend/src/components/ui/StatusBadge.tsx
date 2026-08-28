@@ -1,20 +1,32 @@
-const STATUS_STYLES: Record<string, string> = {
-  Completed: 'bg-emerald-50 text-emerald-700 ring-1 ring-inset ring-emerald-200',
-  Failed: 'bg-red-50 text-red-700 ring-1 ring-inset ring-red-200',
-  Compensated: 'bg-amber-50 text-amber-700 ring-1 ring-inset ring-amber-200',
-  CompensationFailed: 'bg-red-50 text-red-700 ring-1 ring-inset ring-red-200',
+// Sello de goma estampado sobre el ticket. Traduce Orders.Status al
+// vocabulario de la tienda.
+
+interface StampSpec {
+  label: string
+  className: string
 }
 
-const DEFAULT_STATUS_STYLE = 'bg-slate-100 text-slate-600 ring-1 ring-inset ring-slate-200'
+const NEUTRAL = 'text-ink-soft'
+const GREEN = 'text-ledger'
+const RED = 'text-inkred'
+const AMBER = 'text-[#946a1e]' // ámbar legible sobre papel
+
+const SPECS: Record<string, StampSpec> = {
+  Created: { label: 'en mostrador', className: NEUTRAL },
+  'Waiting for release decision': { label: 'espera tu ok', className: AMBER },
+  Completed: { label: 'entregado', className: GREEN },
+  Compensated: { label: 'anulado', className: RED },
+  CompensationFailed: { label: 'reverso incompleto', className: RED },
+  Failed: { label: 'fallido', className: RED },
+}
 
 export function StatusBadge({ status }: { status: string }) {
+  const spec = SPECS[status] ?? { label: status.toLowerCase(), className: NEUTRAL }
   return (
     <span
-      className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${
-        STATUS_STYLES[status] ?? DEFAULT_STATUS_STYLE
-      }`}
+      className={`stamp inline-flex rotate-[-2deg] items-center rounded-[3px] px-2 py-0.5 text-[0.6875rem] ${spec.className}`}
     >
-      {status}
+      {spec.label}
     </span>
   )
 }

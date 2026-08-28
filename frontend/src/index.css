@@ -1,9 +1,154 @@
 @import "tailwindcss";
 
+/* ── Mostrador de noche ─────────────────────────────────────────────
+   Tienda de periféricos + impresora térmica a la vista.
+   El ticket es la pieza central; todo lo demás queda callado.        */
+
 @theme {
-  --font-sans: 'Segoe UI', system-ui, Roboto, sans-serif;
+  --font-sans: "Public Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Bricolage Grotesque", "Public Sans", ui-sans-serif, sans-serif;
+  --font-mono: "Martian Mono", ui-monospace, "SFMono-Regular", "Menlo", monospace;
+
+  /* el mostrador, de noche */
+  --color-counter: #15211d;
+  --color-counter-raised: #1e2e29;
+  --color-counter-line: #32453f;
+
+  /* papel de ticket: la única superficie brillante */
+  --color-paper: #fbfaf5;
+  --color-paper-dim: #efece0;
+  --color-ink: #211e1a;
+  --color-ink-soft: #6b6459; /* texto secundario sobre papel */
+  --color-thermal: #9c968b; /* texto secundario sobre el mostrador oscuro */
+  --color-rule: #d6d1c1;
+
+  /* contabilidad: lo que está en verde vs. lo que está en rojo */
+  --color-ledger: #0e6e57;
+  --color-ledger-bright: #1fae86;
+  --color-inkred: #b23a2e;
+  --color-inkred-bright: #e2685a;
+
+  /* latón de la caja registradora — sólo foco de teclado */
+  --color-brass: #c8a24a;
+}
+
+html {
+  color-scheme: dark;
 }
 
 body {
-  @apply bg-slate-50 text-slate-900;
+  margin: 0;
+  background-color: var(--color-counter);
+  color: var(--color-paper);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Foco de teclado: siempre visible, color latón sobre cualquier fondo. */
+:where(a, button, input, select, textarea, [tabindex]):focus-visible {
+  outline: 2px solid var(--color-brass);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+/* ── El ticket ─────────────────────────────────────────────────────── */
+
+/* Borde perforado: medias lunas recortadas arriba y abajo del papel. */
+.receipt-edge {
+  position: relative;
+}
+.receipt-edge::before,
+.receipt-edge::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 10px;
+  background: radial-gradient(circle at 7px 10px, transparent 6px, var(--color-paper) 6.5px);
+  background-size: 16px 10px;
+  background-repeat: repeat-x;
+}
+.receipt-edge::before {
+  top: -9px;
+  transform: scaleY(-1);
+}
+.receipt-edge::after {
+  bottom: -9px;
+}
+
+/* Textura térmica muy tenue, como líneas del cabezal de impresión. */
+.thermal-grain {
+  background-image: repeating-linear-gradient(
+    0deg,
+    rgba(33, 30, 26, 0.022) 0 1px,
+    transparent 1px 3px
+  );
+}
+
+/* Líneas de puntos que unen concepto y monto, como en un ticket real. */
+.leader {
+  flex: 1;
+  margin: 0 0.5ch;
+  border-bottom: 1px dotted var(--color-rule);
+  transform: translateY(-0.28em);
+}
+
+/* Cada paso del workflow "se imprime" al aparecer. */
+@keyframes receipt-print {
+  from {
+    opacity: 0;
+    clip-path: inset(0 0 100% 0);
+  }
+  to {
+    opacity: 1;
+    clip-path: inset(0 0 0 0);
+  }
+}
+.trace-line {
+  animation: receipt-print 0.26s ease-out both;
+}
+
+/* El paso en espera late despacio. */
+@keyframes thermal-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
+  }
+}
+.trace-wait {
+  animation: thermal-pulse 1.4s ease-in-out infinite;
+}
+
+/* Sello de goma: para el badge de estado y para el ANULADO. */
+.stamp {
+  font-family: var(--font-display);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  border: 2px solid currentColor;
+  border-radius: 3px;
+  mix-blend-mode: multiply;
+}
+
+/* El ANULADO cruzado sobre los pasos revertidos. */
+.stamp-void {
+  color: var(--color-inkred);
+  border: 4px double currentColor;
+  font-family: var(--font-display);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+  opacity: 0.22;
+  transform: rotate(-13deg);
+  mix-blend-mode: multiply;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .trace-line,
+  .trace-wait {
+    animation: none;
+  }
 }
