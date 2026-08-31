@@ -19,6 +19,12 @@ namespace ReleaseOrderDemo.Activities
         // caso no-reintentable (amount <= 0, ver PaymentService.ProcessAsync).
         public const decimal TransientFailureAmount = 999999m;
 
+        // Monto mágico para el demo de idempotencia: en el primer intento lanza
+        // DESPUÉS de que el servicio escribió y el ledger guardó, pero antes de que
+        // la actividad reporte completitud. Así el reintento (attempt 2) observa el
+        // hit del ledger y devuelve el resultado guardado sin duplicar el efecto.
+        public const decimal ReplayProbeAmount = 888888m;
+
         private readonly IPaymentService _paymentService;
         private readonly IOrderRepository _orderRepository;
         private readonly IIdempotencyLedger _ledger;
@@ -48,7 +54,7 @@ namespace ReleaseOrderDemo.Activities
                     $"[Activity] Payment gateway timeout for order {orderId} (attempt {attempt})");
             }
 
-            return await IdempotentActivity.RunAsync(_ledger, orderId, async () =>
+            var result = await IdempotentActivity.RunAsync(_ledger, orderId, async () =>
             {
                 var success = await _paymentService.ProcessAsync(orderId, amount);
                 if (!success)
@@ -64,6 +70,19 @@ namespace ReleaseOrderDemo.Activities
                 Console.WriteLine($"[Activity] Payment processed for order {orderId}");
                 return success;
             });
+
+            // Replay probe: en el primer intento, el servicio ya escribió y el ledger
+            // ya guardó arriba; lanzamos ahora (reintentable) para que Temporal reintente
+            // y el attempt 2 caiga en el hit del ledger sin volver a aplicar el pago.
+            if (amount == ReplayProbeAmount && ActivityExecutionContext.Current.Info.Attempt == 1)
+            {
+                Console.WriteLine(
+                    $"[Activity] Replay probe for order {orderId}: throwing after write+ledger on attempt 1");
+                throw new ApplicationException(
+                    $"[Activity] Replay probe forced retry for order {orderId} (attempt 1)");
+            }
+
+            return result;
         }
 
         [Activity]
