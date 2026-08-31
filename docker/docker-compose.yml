@@ -72,7 +72,8 @@ services:
     command: >-
       /bin/bash -c "sleep 20 &&
       /opt/mssql-tools/bin/sqlcmd -S db -U sa -P YourStrong!Passw0rd -d master -i /docker-entrypoint-initdb.d/init.sql &&
-      /opt/mssql-tools/bin/sqlcmd -S db -U sa -P YourStrong!Passw0rd -d master -i /docker-entrypoint-initdb.d/fix_orders_products_fk.sql"
+      /opt/mssql-tools/bin/sqlcmd -S db -U sa -P YourStrong!Passw0rd -d master -i /docker-entrypoint-initdb.d/fix_orders_products_fk.sql &&
+      /opt/mssql-tools/bin/sqlcmd -S db -U sa -P YourStrong!Passw0rd -d master -i /docker-entrypoint-initdb.d/add_idempotency_ledger.sql"
     volumes:
       - ../scripts/db/:/docker-entrypoint-initdb.d
 
