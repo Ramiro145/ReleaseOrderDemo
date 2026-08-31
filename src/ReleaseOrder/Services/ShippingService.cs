@@ -30,6 +30,15 @@ namespace ReleaseOrderDemo.Services
                 return false;
             }
 
+            // Guarda de estado natural: si ya existe una fila de envío para esta orden,
+            // no insertar otra (defensa en profundidad para la ventana no atómica
+            // entre la escritura de dominio y la del ledger de idempotencia).
+            if (await _shipmentRepository.ExistsForOrderAsync(orderId))
+            {
+                Console.WriteLine($"[Shipping] Shipment already exists for order {orderId}; skipping re-insert");
+                return true;
+            }
+
             var shipment = new ShipmentDto
             {
                 OrderId = orderId,

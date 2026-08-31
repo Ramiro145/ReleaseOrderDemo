@@ -33,6 +33,19 @@ namespace ReleaseOrderDemo.Services
             await cmd.ExecuteNonQueryAsync();
         }
 
+        public async Task<bool> ExistsForOrderAsync(int orderId)
+        {
+            using var conn = new SqlConnection(_connectionString);
+            await conn.OpenAsync();
+
+            var cmd = new SqlCommand(
+                "SELECT COUNT(1) FROM Shipments WHERE OrderId = @OrderId", conn);
+            cmd.Parameters.AddWithValue("@OrderId", orderId);
+
+            var count = Convert.ToInt32(await cmd.ExecuteScalarAsync());
+            return count > 0;
+        }
+
         public async Task UpdateStatusAsync(int shipmentId, string status)
         {
             using var conn = new SqlConnection(_connectionString);
