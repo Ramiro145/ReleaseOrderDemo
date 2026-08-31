@@ -15,22 +15,30 @@ namespace ReleaseOrderDemo.Activities
     {
         private readonly IShippingService _shippingService;
         private readonly IOrderRepository _orderRepository;
+        private readonly IIdempotencyLedger _ledger;
 
-        public ShippingActivities(IShippingService shippingService, IOrderRepository orderRepository)
+        public ShippingActivities(
+            IShippingService shippingService,
+            IOrderRepository orderRepository,
+            IIdempotencyLedger ledger)
         {
             _shippingService = shippingService;
             _orderRepository = orderRepository;
+            _ledger = ledger;
         }
 
         [Activity]
         public async Task ShipOrderAsync(int orderId, string address)
         {
-            var success = await _shippingService.ShipAsync(orderId, address);
-            if (!success)
-                throw new ApplicationException($"[Activity] Shipping failed for order {orderId}");
+            await IdempotentActivity.RunAsync(_ledger, orderId, async () =>
+            {
+                var success = await _shippingService.ShipAsync(orderId, address);
+                if (!success)
+                    throw new ApplicationException($"[Activity] Shipping failed for order {orderId}");
 
-            await _orderRepository.UpdateStatusAsync(orderId, "Shipped");
-            Console.WriteLine($"[Activity] Order {orderId} shipped successfully");
+                await _orderRepository.UpdateStatusAsync(orderId, "Shipped");
+                Console.WriteLine($"[Activity] Order {orderId} shipped successfully");
+            });
         }
     }
 }

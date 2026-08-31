@@ -21,11 +21,16 @@ namespace ReleaseOrderDemo.Activities
 
         private readonly IPaymentService _paymentService;
         private readonly IOrderRepository _orderRepository;
+        private readonly IIdempotencyLedger _ledger;
 
-        public PaymentActivities(IPaymentService paymentService, IOrderRepository orderRepository)
+        public PaymentActivities(
+            IPaymentService paymentService,
+            IOrderRepository orderRepository,
+            IIdempotencyLedger ledger)
         {
             _paymentService = paymentService;
             _orderRepository = orderRepository;
+            _ledger = ledger;
         }
 
         [Activity]
@@ -43,27 +48,33 @@ namespace ReleaseOrderDemo.Activities
                     $"[Activity] Payment gateway timeout for order {orderId} (attempt {attempt})");
             }
 
-            var success = await _paymentService.ProcessAsync(orderId, amount);
-            if (!success)
-                // Rechazo de negocio (ej: gateway declina la tarjeta): reintentar no cambia
-                // el resultado, así que se marca como no-reintentable para que el SAGA pase
-                // directo a compensación en vez de esperar los reintentos de DefaultOptions.
-                throw new ApplicationFailureException(
-                    $"[Activity] Payment declined for order {orderId}",
-                    errorType: "PaymentDeclined",
-                    nonRetryable: true);
+            return await IdempotentActivity.RunAsync(_ledger, orderId, async () =>
+            {
+                var success = await _paymentService.ProcessAsync(orderId, amount);
+                if (!success)
+                    // Rechazo de negocio (ej: gateway declina la tarjeta): reintentar no cambia
+                    // el resultado, así que se marca como no-reintentable para que el SAGA pase
+                    // directo a compensación en vez de esperar los reintentos de DefaultOptions.
+                    throw new ApplicationFailureException(
+                        $"[Activity] Payment declined for order {orderId}",
+                        errorType: "PaymentDeclined",
+                        nonRetryable: true);
 
-            await _orderRepository.UpdateStatusAsync(orderId, "PaymentProcessed");
-            Console.WriteLine($"[Activity] Payment processed for order {orderId}");
-            return success;
+                await _orderRepository.UpdateStatusAsync(orderId, "PaymentProcessed");
+                Console.WriteLine($"[Activity] Payment processed for order {orderId}");
+                return success;
+            });
         }
 
         [Activity]
         public async Task RefundPaymentAsync(int orderId)
         {
-            await _paymentService.RefundAsync(orderId);
-            await _orderRepository.UpdateStatusAsync(orderId, "PaymentRefunded");
-            Console.WriteLine($"[Activity] Payment refunded for order {orderId}");
+            await IdempotentActivity.RunAsync(_ledger, orderId, async () =>
+            {
+                await _paymentService.RefundAsync(orderId);
+                await _orderRepository.UpdateStatusAsync(orderId, "PaymentRefunded");
+                Console.WriteLine($"[Activity] Payment refunded for order {orderId}");
+            });
         }
     }
 }
