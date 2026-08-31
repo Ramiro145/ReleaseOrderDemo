@@ -1,6 +1,6 @@
 # 02 - Idempotencia en servicios y actividades
 
-**Estado:** Borrador
+**Estado:** Aprobado
 **Depende de:** -
 **Fecha:** 2026-08-28
 
@@ -8,7 +8,7 @@
 
 ## Por qué existe este spec
 
-Las actividades actuales aplican efectos no idempotentes: `InventoryService.ReserveAsync` resta `Products.Stock`, `CancelAsync` lo suma, `ShippingService.ShipAsync` hace `INSERT` en `Shipments`, y `PaymentService` muta un `HashSet` en memoria. Temporal garantiza *at-least-once*: si el worker escribe en la base y luego cae (o la actividad supera el `StartToCloseTimeout`) antes de reportar la completitud, Temporal reintenta la misma actividad y el efecto se aplica dos veces — stock restado de más, filas de envío duplicadas, compensaciones que restauran stock varias veces (`CompensationOptions` permite hasta 5 intentos). El demo necesita mostrar el patrón estándar para resolver esto.
+Las actividades actuales aplican efectos no idempotentes: `InventoryService.ReserveAsync` resta `Products.Stock`, `CancelAsync` lo suma, `ShippingService.ShipAsync` hace `INSERT` en `Shipments`, y `PaymentService` muta un `HashSet` en memoria. Temporal garantiza _at-least-once_: si el worker escribe en la base y luego cae (o la actividad supera el `StartToCloseTimeout`) antes de reportar la completitud, Temporal reintenta la misma actividad y el efecto se aplica dos veces — stock restado de más, filas de envío duplicadas, compensaciones que restauran stock varias veces (`CompensationOptions` permite hasta 5 intentos). El demo necesita mostrar el patrón estándar para resolver esto.
 
 ## Alcance
 
@@ -29,7 +29,7 @@ Las actividades actuales aplican efectos no idempotentes: `InventoryService.Rese
   - `ShippingService.ShipAsync`: no volver a insertar si ya existe una fila en `Shipments` para ese `OrderId` (nuevo método `IShipmentRepository.ExistsForOrderAsync`).
   - `PaymentService.ProcessAsync` / `RefundAsync`: ya son naturalmente idempotentes sobre el `HashSet` (`Add`/`Remove` con chequeo de `Contains`); se documenta, no se cambia.
 - Manejo de colisión concurrente: `IdempotencyKey` es PK de `ProcessedActivities`; si el `INSERT` lanza violación de clave (`SqlException.Number` 2627 o 2601) se interpreta como "otro intento ganó" y se re-lee el resultado guardado.
-- Valor mágico de demo `ReplayProbeAmount` (`888888`) en `PaymentActivities.ProcessPaymentAsync`: en el primer intento (`Attempt == 1`) lanza *después* de que el servicio escribió y el ledger guardó, pero antes de que la actividad reporte completitud, para que el reintento observe el hit del ledger y no duplique el efecto.
+- Valor mágico de demo `ReplayProbeAmount` (`888888`) en `PaymentActivities.ProcessPaymentAsync`: en el primer intento (`Attempt == 1`) lanza _después_ de que el servicio escribió y el ledger guardó, pero antes de que la actividad reporte completitud, para que el reintento observe el hit del ledger y no duplique el efecto.
 - Registro del ledger en `ReleaseOrder/Infrastructure/ServiceCollectionExtensions.cs`.
 - Sección nueva en `README.md` describiendo el escenario "replay probe" y qué mirar (logs del ledger, `Products.Stock`, `Shipments`).
 
@@ -118,10 +118,10 @@ Forma de la clave: `release-order-5:ReserveInventoryAsync:5`. Un reintento del m
 
 ## Riesgos identificados
 
-| Riesgo | Mitigación |
-| --- | --- |
-| Ventana no atómica: la escritura de dominio commitea pero el `SaveAsync` del ledger falla antes de persistir. En el reintento no hay hit de ledger. | Guardas de estado natural en los servicios (`InventoryService`, `ShippingService`): el reintento no duplica el efecto y el ledger se escribe en ese segundo intento. |
-| `ResultJson` desincronizado si el tipo de retorno de una actividad cambia en el futuro y quedan filas viejas en el ledger. | El ledger vive en `OrdersDb`, que se reinicializa por `orderId` fresco en cada corrida de prueba (convención del README). En producción se versionaría la key; se documenta como pendiente. |
-| El script extra en `db-init` corre antes de que SQL Server esté listo. | Se agrega después de `init.sql`/`fix_orders_products_fk.sql`, que ya esperan el `sleep 20` del comando actual; hereda esa espera. |
-| Guarda de estado natural en `InventoryService.ReserveAsync` da falso positivo si un `orderId` se reutiliza y la orden ya quedó en un estado avanzado de una corrida anterior. | El README ya obliga a usar un `orderId` fresco por corrida; se refuerza esa nota en la sección nueva. |
-| `PaymentService` es `Singleton` y su `HashSet` se pierde al reiniciar el worker; un refund tras reinicio no encuentra el pago. | Comportamiento preexistente, no introducido por este spec; el ledger hace que la actividad de refund sea idempotente aunque el servicio loguee "no payment found". Se documenta. |
+| Riesgo                                                                                                                                                                        | Mitigación                                                                                                                                                                                  |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Ventana no atómica: la escritura de dominio commitea pero el `SaveAsync` del ledger falla antes de persistir. En el reintento no hay hit de ledger.                           | Guardas de estado natural en los servicios (`InventoryService`, `ShippingService`): el reintento no duplica el efecto y el ledger se escribe en ese segundo intento.                        |
+| `ResultJson` desincronizado si el tipo de retorno de una actividad cambia en el futuro y quedan filas viejas en el ledger.                                                    | El ledger vive en `OrdersDb`, que se reinicializa por `orderId` fresco en cada corrida de prueba (convención del README). En producción se versionaría la key; se documenta como pendiente. |
+| El script extra en `db-init` corre antes de que SQL Server esté listo.                                                                                                        | Se agrega después de `init.sql`/`fix_orders_products_fk.sql`, que ya esperan el `sleep 20` del comando actual; hereda esa espera.                                                           |
+| Guarda de estado natural en `InventoryService.ReserveAsync` da falso positivo si un `orderId` se reutiliza y la orden ya quedó en un estado avanzado de una corrida anterior. | El README ya obliga a usar un `orderId` fresco por corrida; se refuerza esa nota en la sección nueva.                                                                                       |
+| `PaymentService` es `Singleton` y su `HashSet` se pierde al reiniciar el worker; un refund tras reinicio no encuentra el pago.                                                | Comportamiento preexistente, no introducido por este spec; el ledger hace que la actividad de refund sea idempotente aunque el servicio loguee "no payment found". Se documenta.            |
