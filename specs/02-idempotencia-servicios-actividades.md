@@ -1,6 +1,6 @@
 # 02 - Idempotencia en servicios y actividades
 
-**Estado:** Aprobado
+**Estado:** Implementado
 **Depende de:** -
 **Fecha:** 2026-08-28
 
@@ -92,15 +92,15 @@ Forma de la clave: `release-order-5:ReserveInventoryAsync:5`. Un reintento del m
 
 ## Criterios de aceptación
 
-- [ ] `dotnet build ReleaseOrderDemo.sln` compila sin errores.
-- [ ] Levantar el stack crea la tabla `dbo.ProcessedActivities`; re-levantarlo sobre el volumen existente no falla (script re-aplicable).
-- [ ] Un release aprobado normal deja exactamente una fila en `ProcessedActivities` por cada actividad de escritura ejecutada (`ReserveInventoryAsync`, `ProcessPaymentAsync`, `ShipOrderAsync`), con `IdempotencyKey` de la forma `release-order-{id}:{ActivityType}:{id}`.
-- [ ] Con `Amount = 888888` (replay probe): el primer intento de `ProcessPaymentAsync` falla después de escribir, el segundo intento devuelve el resultado guardado sin volver a llamar a `PaymentService`, y el release termina en `Completed`.
-- [ ] En el escenario replay probe, `Products.Stock` del producto se decrementa una sola vez (no dos) y no hay filas duplicadas en `Shipments` para ese `OrderId`.
-- [ ] Reiniciar el worker durante el paso de reserva de inventario (sin fila de ledger todavía) no produce doble decremento de `Products.Stock` gracias a la guarda de estado natural en `InventoryService.ReserveAsync`.
-- [ ] Una compensación que se reintenta (`CancelInventoryAsync`, `RefundPaymentAsync`) no aplica su efecto más de una vez: `Products.Stock` no queda por encima del valor original.
-- [ ] Los dos escenarios del README (Signal aprobada / Signal rechazada) siguen funcionando igual que antes.
-- [ ] Una colisión de `IdempotencyKey` (INSERT duplicado) no lanza excepción no controlada: se captura y se re-lee el resultado guardado.
+- [x] `dotnet build ReleaseOrderDemo.sln` compila sin errores.
+- [x] Levantar el stack crea la tabla `dbo.ProcessedActivities`; re-levantarlo sobre el volumen existente no falla (script re-aplicable).
+- [x] Un release aprobado normal deja exactamente una fila en `ProcessedActivities` por cada actividad de escritura ejecutada (`ReserveInventoryAsync`, `ProcessPaymentAsync`, `ShipOrderAsync`), con `IdempotencyKey` de la forma `release-order-{id}:{ActivityType}:{id}`. _Nota: Temporal expone el `ActivityType` sin el sufijo `Async` (`ReserveInventory`, `ProcessPayment`, `ShipOrder`); las keys quedan `release-order-5008:ReserveInventory:5008`._
+- [x] Con `Amount = 888888` (replay probe): el primer intento de `ProcessPaymentAsync` falla después de escribir, el segundo intento devuelve el resultado guardado sin volver a llamar a `PaymentService`, y el release termina en `Completed`.
+- [x] En el escenario replay probe, `Products.Stock` del producto se decrementa una sola vez (no dos) y no hay filas duplicadas en `Shipments` para ese `OrderId`.
+- [x] Reiniciar el worker durante el paso de reserva de inventario (sin fila de ledger todavía) no produce doble decremento de `Products.Stock` gracias a la guarda de estado natural en `InventoryService.ReserveAsync`.
+- [x] Una compensación que se reintenta (`CancelInventoryAsync`, `RefundPaymentAsync`) no aplica su efecto más de una vez: `Products.Stock` no queda por encima del valor original.
+- [x] Los dos escenarios del README (Signal aprobada / Signal rechazada) siguen funcionando igual que antes.
+- [x] Una colisión de `IdempotencyKey` (INSERT duplicado) no lanza excepción no controlada: se captura y se re-lee el resultado guardado.
 
 ## Decisiones tomadas y descartadas
 
