@@ -15,11 +15,16 @@ namespace ReleaseOrderDemo.Activities
     {
         private readonly IInventoryService _inventoryService;
         private readonly IOrderRepository _orderRepository;
+        private readonly IIdempotencyLedger _ledger;
 
-        public InventoryActivities(IInventoryService inventoryService, IOrderRepository orderRepository)
+        public InventoryActivities(
+            IInventoryService inventoryService,
+            IOrderRepository orderRepository,
+            IIdempotencyLedger ledger)
         {
             _inventoryService = inventoryService;
             _orderRepository = orderRepository;
+            _ledger = ledger;
         }
 
         [Activity]
@@ -33,20 +38,26 @@ namespace ReleaseOrderDemo.Activities
         [Activity]
         public async Task ReserveInventoryAsync(int orderId, int productId, int quantity)
         {
-            var reserved = await _inventoryService.ReserveAsync(orderId, productId, quantity);
-            if (!reserved)
-                throw new InventoryUnavailableException($"[Activity] No stock available for order {orderId}");
+            await IdempotentActivity.RunAsync(_ledger, orderId, async () =>
+            {
+                var reserved = await _inventoryService.ReserveAsync(orderId, productId, quantity);
+                if (!reserved)
+                    throw new InventoryUnavailableException($"[Activity] No stock available for order {orderId}");
 
-            await _orderRepository.UpdateStatusAsync(orderId, "InventoryReserved");
-            Console.WriteLine($"[Activity] Inventory reserved for order {orderId}");
+                await _orderRepository.UpdateStatusAsync(orderId, "InventoryReserved");
+                Console.WriteLine($"[Activity] Inventory reserved for order {orderId}");
+            });
         }
 
         [Activity]
         public async Task CancelInventoryAsync(int orderId, int productId, int quantity)
         {
-            await _inventoryService.CancelAsync(orderId, productId, quantity);
-            await _orderRepository.UpdateStatusAsync(orderId, "InventoryCanceled");
-            Console.WriteLine($"[Activity] Inventory reservation canceled for order {orderId}");
+            await IdempotentActivity.RunAsync(_ledger, orderId, async () =>
+            {
+                await _inventoryService.CancelAsync(orderId, productId, quantity);
+                await _orderRepository.UpdateStatusAsync(orderId, "InventoryCanceled");
+                Console.WriteLine($"[Activity] Inventory reservation canceled for order {orderId}");
+            });
         }
     }
 }
