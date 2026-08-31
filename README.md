@@ -262,8 +262,77 @@ Temporal. Es `ReleaseOrderWorkflow` quien decide que no debe reintentarse:
 de que la Activity se marque a sí misma como no-reintentable, es el Workflow
 quien decide por tipo de excepción.
 
+## Prueba F: idempotencia de actividades (replay probe)
+
+Temporal garantiza _at-least-once_: si el Worker escribe en la base y se cae (o
+la Activity supera su `StartToCloseTimeout`) **antes** de reportar completitud,
+Temporal reintenta la misma Activity y un efecto no idempotente se aplica dos
+veces — stock restado de más, filas de envío duplicadas, compensaciones que
+restauran stock varias veces.
+
+Las Activities de escritura de `ReleaseOrder` (`ReserveInventoryAsync`,
+`CancelInventoryAsync`, `ProcessPaymentAsync`, `RefundPaymentAsync`,
+`ShipOrderAsync`) se envuelven con el helper `IdempotentActivity`, que consulta
+un ledger SQL (`dbo.ProcessedActivities`) por una clave estable
+`release-order-{id}:{ActivityType}:{id}`: si ya hay fila, devuelve el resultado
+guardado sin volver a ejecutar el cuerpo. Como defensa en profundidad para la
+ventana no atómica entre la escritura de dominio y la del ledger, los servicios
+(`InventoryService`, `ShippingService`) tienen además guardas de estado natural
+(no vuelven a restar/sumar/insertar si la orden ya pasó por ese paso).
+
+### F.1 — Escenario replay probe con `Amount = 888888`
+
+Crea una orden con `Amount = 888888` (`ReplayProbeAmount`), un `Address` **sin**
+la palabra `FAIL`, y libérala y apruébala (Prueba A). En el primer intento de
+`ProcessPaymentAsync` el servicio escribe y el ledger guarda la fila, y **acto
+seguido** la Activity lanza una `ApplicationException` reintentable simulando la
+caída del Worker antes de reportar completitud. Temporal reintenta; el segundo
+intento observa el hit del ledger y devuelve el resultado guardado sin volver a
+llamar a `PaymentService`. La orden termina en `Completed`.
+
+Líneas de log a buscar en `docker compose logs release-orden-worker`:
+
+```text
+[Activity] Payment processed for order {id}          # attempt 1: efecto aplicado
+[Ledger] saved release-order-{id}:ProcessPaymentAsync:{id}
+[Activity] Replay probe for order {id}: throwing after write+ledger on attempt 1
+[Ledger] hit release-order-{id}:ProcessPaymentAsync:{id}, returning stored result   # attempt 2
+```
+
+### F.2 — Verificar que el efecto se aplicó una sola vez
+
+- **`Products.Stock`**: anota el stock del `productId` antes de la prueba.
+  Después del release aprobado debe haber bajado **exactamente** `Quantity`
+  unidades, no `2 × Quantity`.
+  ```sql
+  SELECT ProductId, Stock FROM Products WHERE ProductId = {productId};
+  ```
+- **`Shipments`**: debe haber **una sola** fila para ese `OrderId`.
+  ```sql
+  SELECT * FROM Shipments WHERE OrderId = {orderId};
+  ```
+- **`ProcessedActivities`**: una fila por Activity de escritura ejecutada
+  (`ReserveInventoryAsync`, `ProcessPaymentAsync`, `ShipOrderAsync` en el camino
+  aprobado), con `IdempotencyKey` de la forma `release-order-{id}:{ActivityType}:{id}`.
+  ```sql
+  SELECT IdempotencyKey, OrderId, CreatedAt FROM ProcessedActivities
+  WHERE OrderId = {orderId} ORDER BY CreatedAt;
+  ```
+
+### F.3 — Compensaciones idempotentes
+
+Repite la Prueba B (Signal rechazada) o la Prueba C.2 (`Address` con `FAIL`): si
+`CancelInventoryAsync` o `RefundPaymentAsync` se reintentan, el ledger y las
+guardas de estado natural evitan que el stock quede **por encima** del valor
+original.
+
+> Usa un `orderId` fresco por corrida: el Workflow Id `release-order-{orderId}`
+> es estable y la clave del ledger depende de él, así que reusar un `orderId` de
+> una corrida anterior daría hits de ledger o falsos positivos en las guardas de
+> estado natural.
+
 ## Alcance intencional
 
-Esta versión no agrega todavía timers ni pruebas de replay. El objetivo es
-comprender completamente Signal, Update y Child Workflow antes de incorporar
+Esta versión no agrega todavía timers. El objetivo es comprender completamente
+Signal, Update, Child Workflow e idempotencia de actividades antes de incorporar
 otra capacidad de Temporal.
