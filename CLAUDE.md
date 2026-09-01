@@ -147,3 +147,11 @@ patches the `Orders.ProductId → Products.ProductId` FK on an existing DB (both
 the `db-init` compose service). `Orders.Status` is the source of truth the workflows write back to
 via `OrderStatusActivities`; Temporal's own execution status (`Running`/`Completed`) is a separate,
 parallel piece of state surfaced via `WorkflowValidator`/`GetStatus`.
+
+`Orders.Status` doubles as the idempotency marker for Temporal's at-least-once Activity retries
+(see `specs/03-idempotencia-por-estado.md`): `IOrderStateMachine` (`ReleaseOrder/Services/OrderStateMachine.cs`)
+advances it and applies the matching domain effect (`Products.Stock`, `Shipments` insert) in one
+SQL transaction per step, reading `Status` with `UPDLOCK` first — a retry always finds `Status`
+already past the step and skips the effect. No separate idempotency-ledger table exists; a prior
+`dbo.ProcessedActivities` ledger design was superseded by this approach (see
+`specs/02-idempotencia-servicios-actividades.md`).

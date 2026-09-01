@@ -1,8 +1,12 @@
 # 02 - Idempotencia en servicios y actividades
 
-**Estado:** Implementado
+**Estado:** Superseded por [03-idempotencia-por-estado.md](03-idempotencia-por-estado.md)
 **Depende de:** -
 **Fecha:** 2026-08-28
+
+> El ledger SQL (`dbo.ProcessedActivities`, `IIdempotencyLedger`, `IdempotentActivity`) descrito
+> en este spec fue reemplazado por idempotencia basada en `dbo.Orders.Status` — ver spec 03. Este
+> documento queda como registro de la decisión original; el código ya no existe en el repo.
 
 **Objetivo:** Hacer que las actividades de escritura del worker `ReleaseOrder` (reserva/cancelación de inventario, procesamiento/reembolso de pago y despacho) toleren el at-least-once de Temporal sin duplicar su efecto, combinando un ledger de idempotencia en SQL Server con guardas de estado natural en los servicios.
 

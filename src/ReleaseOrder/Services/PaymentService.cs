@@ -9,6 +9,9 @@ namespace ReleaseOrderDemo.Services
     /// Servicio que simula el procesamiento de pagos.
     /// En un escenario real, aquí se conectaría a un gateway de pagos (Stripe, PayPal, etc.).
     /// FailPayment es un flag de prueba que NO forma parte de la interfaz pública.
+    /// Naturalmente idempotente sobre el HashSet (Add/Remove con chequeo de Contains); la
+    /// idempotencia de la actividad frente al at-least-once de Temporal la da
+    /// IOrderStateMachine (Orders.Status), no este servicio.
     /// </summary>
     public class PaymentService : IPaymentService
     {

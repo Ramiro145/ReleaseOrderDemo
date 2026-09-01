@@ -1,7 +1,5 @@
 using System;
 using System.Threading.Tasks;
-using Microsoft.Data.SqlClient;
-using Contracts.Dtos;
 using Contracts.Services;
 using Contracts.Repositories;
 
@@ -11,11 +9,16 @@ namespace ReleaseOrderDemo.Services
     {
         private readonly IShipmentRepository _shipmentRepository;
         private readonly IOrderRepository _orderRepository;
+        private readonly IOrderStateMachine _stateMachine;
 
-        public ShippingService(IShipmentRepository shipmentRepository, IOrderRepository orderRepository)
+        public ShippingService(
+            IShipmentRepository shipmentRepository,
+            IOrderRepository orderRepository,
+            IOrderStateMachine stateMachine)
         {
             _shipmentRepository = shipmentRepository;
             _orderRepository = orderRepository;
+            _stateMachine = stateMachine;
         }
 
         public async Task<bool> ShipAsync(int orderId, string address)
@@ -30,25 +33,12 @@ namespace ReleaseOrderDemo.Services
                 return false;
             }
 
-            // Guarda de estado natural: si ya existe una fila de envío para esta orden,
-            // no insertar otra (defensa en profundidad para la ventana no atómica
-            // entre la escritura de dominio y la del ledger de idempotencia).
-            if (await _shipmentRepository.ExistsForOrderAsync(orderId))
-            {
-                Console.WriteLine($"[Shipping] Shipment already exists for order {orderId}; skipping re-insert");
-                return true;
-            }
-
-            var shipment = new ShipmentDto
-            {
-                OrderId = orderId,
-                Address = address,
-                Status = "Shipped",
-                CreatedAt = DateTime.UtcNow
-            };
-
-            await _shipmentRepository.InsertAsync(shipment);
-            await _orderRepository.UpdateStatusAsync(orderId, "Shipped");
+            // Idempotente vía IOrderStateMachine: el INSERT en Shipments y el avance de
+            // Orders.Status a 'Shipped' ocurren en una única transacción SQL; un reintento
+            // de Temporal encuentra el Status ya avanzado y no vuelve a insertar.
+            var outcome = await _stateMachine.TryShipAsync(orderId, address!);
+            if (outcome is not (StepOutcome.Applied or StepOutcome.AlreadyApplied))
+                return false;
 
             Console.WriteLine($"[Shipping] Order {orderId} shipped to {address}");
             return true;
@@ -57,6 +47,8 @@ namespace ReleaseOrderDemo.Services
         public async Task CancelShipmentAsync(int shipmentId, int orderId)
         {
             await _shipmentRepository.UpdateStatusAsync(shipmentId, "Canceled");
+            // No forma parte del SAGA actual (ningún workflow invoca este método), así que
+            // se mantiene fuera de la máquina de estados de IOrderStateMachine.
             await _orderRepository.UpdateStatusAsync(orderId, "ShippingCanceled");
 
             Console.WriteLine($"[Shipping] Shipment {shipmentId} canceled for order {orderId}");

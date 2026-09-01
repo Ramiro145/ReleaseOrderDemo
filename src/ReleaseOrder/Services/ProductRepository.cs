@@ -44,17 +44,5 @@ namespace ReleaseOrderDemo.Services
                 IsActive = reader.GetBoolean(reader.GetOrdinal("IsActive"))
             };
         }
-
-        public async Task UpdateStockAsync(int productId, int newStock)
-        {
-            using var conn = new SqlConnection(_connectionString);
-            await conn.OpenAsync();
-
-            var cmd = new SqlCommand("UPDATE Products SET Stock = @Stock WHERE ProductId = @ProductId", conn);
-            cmd.Parameters.AddWithValue("@Stock", newStock);
-            cmd.Parameters.AddWithValue("@ProductId", productId);
-
-            await cmd.ExecuteNonQueryAsync();
-        }
     }
 }

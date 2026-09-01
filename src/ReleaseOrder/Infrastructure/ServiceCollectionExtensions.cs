@@ -20,7 +20,7 @@ namespace ReleaseOrderDemo.Infrastructure
             services.AddTransient<IOrderRepository>(_ => new OrderRepository(connectionString));
             services.AddTransient<IProductRepository>(_ => new ProductRepository(connectionString));
             services.AddTransient<IShipmentRepository>(_ => new ShipmentRepository(connectionString));
-            services.AddTransient<IIdempotencyLedger>(_ => new IdempotencyLedger(connectionString));
+            services.AddTransient<IOrderStateMachine>(_ => new OrderStateMachine(connectionString));
 
             // Servicios
             // PaymentService es Singleton: mantiene _processedPayments en memoria entre actividades

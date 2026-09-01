@@ -10,7 +10,9 @@ namespace ReleaseOrderDemo.Activities
     /// <summary>
     /// Actividades de dominio de pagos.
     /// SRP: solo gestiona procesamiento y reembolso de pagos.
-    /// DIP: depende de IPaymentService e IOrderRepository (abstracciones).
+    /// DIP: depende de IPaymentService e IOrderStateMachine (abstracciones). La
+    /// idempotencia frente al at-least-once de Temporal la da IOrderStateMachine
+    /// (Orders.Status), que avanza en la misma transacción que valida el reintento.
     /// </summary>
     public class PaymentActivities
     {
@@ -20,23 +22,18 @@ namespace ReleaseOrderDemo.Activities
         public const decimal TransientFailureAmount = 999999m;
 
         // Monto mágico para el demo de idempotencia: en el primer intento lanza
-        // DESPUÉS de que el servicio escribió y el ledger guardó, pero antes de que
-        // la actividad reporte completitud. Así el reintento (attempt 2) observa el
-        // hit del ledger y devuelve el resultado guardado sin duplicar el efecto.
+        // DESPUÉS de que Orders.Status ya avanzó a 'PaymentProcessed', pero antes de
+        // que la actividad reporte completitud. Así el reintento (attempt 2) encuentra
+        // el Status ya avanzado y no duplica el efecto.
         public const decimal ReplayProbeAmount = 888888m;
 
         private readonly IPaymentService _paymentService;
-        private readonly IOrderRepository _orderRepository;
-        private readonly IIdempotencyLedger _ledger;
+        private readonly IOrderStateMachine _stateMachine;
 
-        public PaymentActivities(
-            IPaymentService paymentService,
-            IOrderRepository orderRepository,
-            IIdempotencyLedger ledger)
+        public PaymentActivities(IPaymentService paymentService, IOrderStateMachine stateMachine)
         {
             _paymentService = paymentService;
-            _orderRepository = orderRepository;
-            _ledger = ledger;
+            _stateMachine = stateMachine;
         }
 
         [Activity]
@@ -54,46 +51,54 @@ namespace ReleaseOrderDemo.Activities
                     $"[Activity] Payment gateway timeout for order {orderId} (attempt {attempt})");
             }
 
-            var result = await IdempotentActivity.RunAsync(_ledger, orderId, async () =>
-            {
-                var success = await _paymentService.ProcessAsync(orderId, amount);
-                if (!success)
-                    // Rechazo de negocio (ej: gateway declina la tarjeta): reintentar no cambia
-                    // el resultado, así que se marca como no-reintentable para que el SAGA pase
-                    // directo a compensación en vez de esperar los reintentos de DefaultOptions.
-                    throw new ApplicationFailureException(
-                        $"[Activity] Payment declined for order {orderId}",
-                        errorType: "PaymentDeclined",
-                        nonRetryable: true);
+            // PaymentService.ProcessAsync es naturalmente idempotente (Add/Contains sobre un
+            // HashSet), así que se llama en cada intento: la decisión de negocio (aprobar/
+            // declinar) no necesita guardarse aparte. Lo que sí debe ser idempotente frente
+            // al at-least-once de Temporal es el avance de Orders.Status, que hace
+            // TryMarkPaymentProcessedAsync en una transacción atómica.
+            var success = await _paymentService.ProcessAsync(orderId, amount);
+            if (!success)
+                // Rechazo de negocio (ej: gateway declina la tarjeta): reintentar no cambia
+                // el resultado, así que se marca como no-reintentable para que el SAGA pase
+                // directo a compensación en vez de esperar los reintentos de DefaultOptions.
+                throw new ApplicationFailureException(
+                    $"[Activity] Payment declined for order {orderId}",
+                    errorType: "PaymentDeclined",
+                    nonRetryable: true);
 
-                await _orderRepository.UpdateStatusAsync(orderId, "PaymentProcessed");
-                Console.WriteLine($"[Activity] Payment processed for order {orderId}");
-                return success;
-            });
+            var outcome = await _stateMachine.TryMarkPaymentProcessedAsync(orderId);
+            if (outcome is StepOutcome.OrderNotFound)
+                throw new ApplicationFailureException(
+                    $"[Activity] Order {orderId} not found", errorType: "OrderNotFound", nonRetryable: true);
 
-            // Replay probe: en el primer intento, el servicio ya escribió y el ledger
-            // ya guardó arriba; lanzamos ahora (reintentable) para que Temporal reintente
-            // y el attempt 2 caiga en el hit del ledger sin volver a aplicar el pago.
+            Console.WriteLine($"[Activity] Payment processed for order {orderId}");
+
+            // Replay probe: Orders.Status ya avanzó a 'PaymentProcessed' arriba; lanzamos
+            // ahora (reintentable) para que Temporal reintente y el attempt 2 caiga en la
+            // guarda de AlreadyApplied sin volver a aplicar el pago.
             if (amount == ReplayProbeAmount && ActivityExecutionContext.Current.Info.Attempt == 1)
             {
                 Console.WriteLine(
-                    $"[Activity] Replay probe for order {orderId}: throwing after write+ledger on attempt 1");
+                    $"[Activity] Replay probe for order {orderId}: throwing after status advance on attempt 1");
                 throw new ApplicationException(
                     $"[Activity] Replay probe forced retry for order {orderId} (attempt 1)");
             }
 
-            return result;
+            return success;
         }
 
         [Activity]
         public async Task RefundPaymentAsync(int orderId)
         {
-            await IdempotentActivity.RunAsync(_ledger, orderId, async () =>
+            var outcome = await _stateMachine.TryMarkPaymentRefundedAsync(orderId);
+            if (outcome is StepOutcome.AlreadyApplied)
             {
-                await _paymentService.RefundAsync(orderId);
-                await _orderRepository.UpdateStatusAsync(orderId, "PaymentRefunded");
-                Console.WriteLine($"[Activity] Payment refunded for order {orderId}");
-            });
+                Console.WriteLine($"[Activity] Payment already refunded for order {orderId} (idempotent retry)");
+                return;
+            }
+
+            await _paymentService.RefundAsync(orderId);
+            Console.WriteLine($"[Activity] Payment refunded for order {orderId}");
         }
     }
 }

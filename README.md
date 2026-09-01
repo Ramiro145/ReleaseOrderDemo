@@ -270,33 +270,36 @@ Temporal reintenta la misma Activity y un efecto no idempotente se aplica dos
 veces — stock restado de más, filas de envío duplicadas, compensaciones que
 restauran stock varias veces.
 
-Las Activities de escritura de `ReleaseOrder` (`ReserveInventoryAsync`,
-`CancelInventoryAsync`, `ProcessPaymentAsync`, `RefundPaymentAsync`,
-`ShipOrderAsync`) se envuelven con el helper `IdempotentActivity`, que consulta
-un ledger SQL (`dbo.ProcessedActivities`) por una clave estable
-`release-order-{id}:{ActivityType}:{id}`: si ya hay fila, devuelve el resultado
-guardado sin volver a ejecutar el cuerpo. Como defensa en profundidad para la
-ventana no atómica entre la escritura de dominio y la del ledger, los servicios
-(`InventoryService`, `ShippingService`) tienen además guardas de estado natural
-(no vuelven a restar/sumar/insertar si la orden ya pasó por ese paso).
+`ReleaseOrder` resuelve esto **sin tabla extra**: `dbo.Orders.Status` ya es una
+máquina de estados (`InventoryReserved → PaymentProcessed → Completed →
+Shipped`, con `InventoryCanceled`/`PaymentRefunded`/`Compensated` en la
+compensación), y esa columna es la marca de idempotencia. Cada Activity de
+escritura (`ReserveInventoryAsync`, `CancelInventoryAsync`, `ShipOrderAsync`, y
+el avance de estado de `ProcessPaymentAsync`/`RefundPaymentAsync`) llama a
+`IOrderStateMachine`, que en una **única transacción SQL** lee `Status` con
+`UPDLOCK`, decide si el paso ya se aplicó, y si no, aplica el efecto de dominio
+(`Products.Stock`, `INSERT` en `Shipments`) y avanza `Status` — todo atómico, sin
+ventana entre "escribir el efecto" y "marcar que se escribió". Un reintento de
+Temporal siempre encuentra el `Status` ya avanzado y no duplica el efecto.
 
 ### F.1 — Escenario replay probe con `Amount = 888888`
 
 Crea una orden con `Amount = 888888` (`ReplayProbeAmount`), un `Address` **sin**
 la palabra `FAIL`, y libérala y apruébala (Prueba A). En el primer intento de
-`ProcessPaymentAsync` el servicio escribe y el ledger guarda la fila, y **acto
-seguido** la Activity lanza una `ApplicationException` reintentable simulando la
-caída del Worker antes de reportar completitud. Temporal reintenta; el segundo
-intento observa el hit del ledger y devuelve el resultado guardado sin volver a
-llamar a `PaymentService`. La orden termina en `Completed`.
+`ProcessPaymentAsync`, `Orders.Status` ya avanzó a `PaymentProcessed` (efecto
+aplicado atómicamente), y **acto seguido** la Activity lanza una
+`ApplicationException` reintentable simulando la caída del Worker antes de
+reportar completitud. Temporal reintenta; el segundo intento encuentra
+`Status = 'PaymentProcessed'` y no vuelve a llamar a `PaymentService`. La orden
+termina en `Completed`.
 
 Líneas de log a buscar en `docker compose logs release-orden-worker`:
 
 ```text
-[Activity] Payment processed for order {id}          # attempt 1: efecto aplicado
-[Ledger] saved release-order-{id}:ProcessPaymentAsync:{id}
-[Activity] Replay probe for order {id}: throwing after write+ledger on attempt 1
-[Ledger] hit release-order-{id}:ProcessPaymentAsync:{id}, returning stored result   # attempt 2
+[State] order {id} advanced to 'PaymentProcessed'                              # attempt 1: efecto aplicado
+[Activity] Payment processed for order {id}
+[Activity] Replay probe for order {id}: throwing after status advance on attempt 1
+[State] order {id} already 'PaymentProcessed'; skipping (idempotent retry)     # attempt 2
 ```
 
 ### F.2 — Verificar que el efecto se aplicó una sola vez
@@ -311,25 +314,22 @@ Líneas de log a buscar en `docker compose logs release-orden-worker`:
   ```sql
   SELECT * FROM Shipments WHERE OrderId = {orderId};
   ```
-- **`ProcessedActivities`**: una fila por Activity de escritura ejecutada
-  (`ReserveInventoryAsync`, `ProcessPaymentAsync`, `ShipOrderAsync` en el camino
-  aprobado), con `IdempotencyKey` de la forma `release-order-{id}:{ActivityType}:{id}`.
+- **`Orders.Status`**: debe reflejar el último paso alcanzado (`Completed` en el
+  camino aprobado sin fallos posteriores).
   ```sql
-  SELECT IdempotencyKey, OrderId, CreatedAt FROM ProcessedActivities
-  WHERE OrderId = {orderId} ORDER BY CreatedAt;
+  SELECT OrderId, Status, UpdatedAt FROM Orders WHERE OrderId = {orderId};
   ```
 
 ### F.3 — Compensaciones idempotentes
 
 Repite la Prueba B (Signal rechazada) o la Prueba C.2 (`Address` con `FAIL`): si
-`CancelInventoryAsync` o `RefundPaymentAsync` se reintentan, el ledger y las
-guardas de estado natural evitan que el stock quede **por encima** del valor
-original.
+`CancelInventoryAsync` o `RefundPaymentAsync` se reintentan, la transacción de
+`IOrderStateMachine` evita que el stock quede **por encima** del valor original.
 
-> Usa un `orderId` fresco por corrida: el Workflow Id `release-order-{orderId}`
-> es estable y la clave del ledger depende de él, así que reusar un `orderId` de
-> una corrida anterior daría hits de ledger o falsos positivos en las guardas de
-> estado natural.
+> Usa un `orderId` fresco por corrida: la idempotencia se basa en `Orders.Status`
+> para ese `orderId`, así que reusar uno de una corrida anterior (que ya quedó en
+> `Completed`/`Shipped`) hace que los pasos posteriores se salteen como "ya
+> aplicados" sin ejecutar de verdad.
 
 ## Alcance intencional
 

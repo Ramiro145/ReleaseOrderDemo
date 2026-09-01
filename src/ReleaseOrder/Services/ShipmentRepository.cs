@@ -1,7 +1,5 @@
-using System;
-using Microsoft.Data.SqlClient;
 using System.Threading.Tasks;
-using Contracts.Dtos;
+using Microsoft.Data.SqlClient;
 using Contracts.Repositories;
 
 namespace ReleaseOrderDemo.Services
@@ -13,37 +11,6 @@ namespace ReleaseOrderDemo.Services
         public ShipmentRepository(string connectionString)
         {
             _connectionString = connectionString;
-        }
-
-        public async Task InsertAsync(ShipmentDto shipment)
-        {
-            using var conn = new SqlConnection(_connectionString);
-            await conn.OpenAsync();
-
-            var cmd = new SqlCommand(
-                "INSERT INTO Shipments (OrderId, Address, Status, CreatedAt) VALUES (@OrderId, @Address, @Status, @CreatedAt)",
-                conn
-            );
-
-            cmd.Parameters.AddWithValue("@OrderId", shipment.OrderId);
-            cmd.Parameters.AddWithValue("@Address", shipment.Address);
-            cmd.Parameters.AddWithValue("@Status", shipment.Status);
-            cmd.Parameters.AddWithValue("@CreatedAt", shipment.CreatedAt);
-
-            await cmd.ExecuteNonQueryAsync();
-        }
-
-        public async Task<bool> ExistsForOrderAsync(int orderId)
-        {
-            using var conn = new SqlConnection(_connectionString);
-            await conn.OpenAsync();
-
-            var cmd = new SqlCommand(
-                "SELECT COUNT(1) FROM Shipments WHERE OrderId = @OrderId", conn);
-            cmd.Parameters.AddWithValue("@OrderId", orderId);
-
-            var count = Convert.ToInt32(await cmd.ExecuteScalarAsync());
-            return count > 0;
         }
 
         public async Task UpdateStatusAsync(int shipmentId, string status)
