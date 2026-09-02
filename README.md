@@ -331,6 +331,37 @@ Repite la Prueba B (Signal rechazada) o la Prueba C.2 (`Address` con `FAIL`): si
 > `Completed`/`Shipped`) hace que los pasos posteriores se salteen como "ya
 > aplicados" sin ejecutar de verdad.
 
+## Prueba G: tests automatizados con time-skipping
+
+`test/ReleaseOrder.Tests/` (xUnit) prueba las Pruebas A y B (Signal aprobada /
+rechazada) sin Docker ni SQL Server, con el reloj de Temporal acelerado.
+
+```powershell
+dotnet test ReleaseOrderDemo.sln
+# o solo esta clase:
+dotnet test --filter "ReleaseOrderWorkflowTests"
+```
+
+Tres piezas, igual que en cualquier suite de Temporal:
+
+1. **`await using var env = await WorkflowEnvironment.StartTimeSkippingAsync();`** —
+   servidor de pruebas embebido con reloj virtual. Los dos `Workflow.DelayAsync`
+   de la demo (5s antes del lookup, 10s antes del Child Workflow) no cuestan
+   tiempo real: el test corre en ~1s.
+2. **`using var worker = new TemporalWorker(env.Client, new TemporalWorkerOptions(taskQueue)
+   .AddAllActivities(...).AddWorkflow<ReleaseOrderWorkflow>().AddWorkflow<ShippingWorkflow>());`** —
+   registra el workflow, su Child Workflow y las Activities. Se usan las
+   Activities y los Services reales; solo el borde SQL (`IOrderStateMachine` y
+   los repositorios) va con fakes en memoria (`Fakes/`), que reproducen la tabla
+   de transiciones de `specs/03-idempotencia-por-estado.md`.
+3. **`await worker.ExecuteAsync(async () => { ... })`** — arranca el workflow,
+   espera con la Query `GetStatus` hasta `"Waiting for release decision"`, manda
+   la Signal (`SubmitReleaseDecisionAsync`) y compara el resultado, el recorrido
+   de `Orders.Status`, el stock y las filas de envío.
+
+La primera corrida descarga el binario del test server (necesita red una vez;
+después queda cacheado en el perfil del usuario).
+
 ## Alcance intencional
 
 Esta versión no agrega todavía timers. El objetivo es comprender completamente

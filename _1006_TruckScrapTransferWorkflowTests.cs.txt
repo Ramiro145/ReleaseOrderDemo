@@ -1,0 +1,613 @@
+// ============================================================================
+//  _1006_TruckScrapTransferWorkflowTests.cs
+//  Pruebas del workflow TRANSFER_1006 (traspaso de chatarra) con Temporal + time-skipping.
+//
+//  Ubicación:  test/OneGate.YardFlow.Workflows.Tests/Gate/_1006_TruckScrapTransferWorkflowTests.cs
+//  Correr:     dotnet test --filter "_1006_TruckScrapTransferWorkflowTests"
+//
+//  Foco: cobertura COMPLETA de _1006_ (traspaso de chatarra entre plantas).
+//   - Camino feliz + notificación de LLEGADA a Mercancías en Tránsito (RF-406):
+//       CA-406-03 (llegada en check-in antes del cierre), CA-406-04 (MeT no responde →
+//       MET_SYNC_PENDING y continúa), CA-406-05 (detalle del viaje persistido).
+//   - Radiación (device/manual, hard-stop ALARM), validación de imágenes de origen
+//       (confirmar / rechazar / timeout), pre y clasificación final, doble pesaje con
+//       respaldos manuales, neto vs pedido (aprobado / timeout), y cierre de traspaso
+//       (create + close), incluyendo fallo de negocio y fallo técnico.
+//   - Todos los caminos terminales y vencimientos de SLA (con time-skipping).
+//
+//  Mismos patrones que _1001_/_1003_/_1004_/_1005_: nombres de activity sin sufijo
+//  "Async", señales en buffer tras iniciar, DTOs opacos con Uninit<T>(), aprobación
+//  de delta con reenvío (GateWorkflowBase resetea el flag al entrar al paso).
+// ============================================================================
+
+using System.Collections.Concurrent;
+using System.Runtime.CompilerServices;
+using Temporalio.Activities;
+using Temporalio.Client;
+using Temporalio.Testing;
+using Temporalio.Worker;
+using Xunit;
+
+using OneGate.YardFlow.Workflows.Common;
+using OneGate.YardFlow.Workflows.Gate;
+using OneGate.YardFlow.Application.DTOs.Gate;
+
+namespace OneGate.YardFlow.Workflows.Tests.Gate;
+
+public class _1006_TruckScrapTransferWorkflowTests
+{
+    private const string TaskQueue = "gate-queue-test-1006";
+
+    // ── Config de comportamiento ────────────────────────────────────────────────
+    public sealed class ScenarioConfig
+    {
+        public bool Pesable { get; set; } = true;
+        public double EntryWeightKg { get; set; } = 30000.0;
+        public double ExitWeightKg { get; set; } = 12000.0;   // neto 18000
+        public bool RadiationAlarm { get; set; } = false;
+        public bool LlegadaThrows { get; set; } = false;       // CA-406-04: MeT no responde
+        public bool EntryScaleFails { get; set; } = false;     // báscula entrada no responde
+        public bool ExitScaleFails { get; set; } = false;      // báscula salida no responde
+        public bool MovimientoCloses { get; set; } = true;     // false → TRANSFER_CLOSE_FAILED
+        public bool AceriaThrows { get; set; } = false;        // true  → WORKFLOW_ERROR (create movimiento)
+
+        /// <summary>Orden de llamadas relevantes (patch:{estado}, llegada, close) para aserciones.</summary>
+        public ConcurrentQueue<string> Calls { get; } = new();
+    }
+
+    private static T Uninit<T>() => (T)RuntimeHelpers.GetUninitializedObject(typeof(T));
+    private static void Set(object obj, string prop, object? val) =>
+        obj.GetType().GetProperty(prop)!.SetValue(obj, val);
+
+    private static GradingResultDto Grading(string material = "FE-001", string ticket = "TCK-001")
+    {
+        var g = Uninit<GradingResultDto>();
+        Set(g, "PrimaryMaterialCode", material);
+        Set(g, "TicketId", ticket);
+        try { Set(g, "TripId", "trip-test"); } catch { /* opcional */ }
+        return g;
+    }
+
+    // ── Activities mock ─────────────────────────────────────────────────────────
+    public sealed class MockActivities
+    {
+        private readonly ScenarioConfig _c;
+        public MockActivities(ScenarioConfig c) => _c = c;
+
+        private static T U<T>() => (T)RuntimeHelpers.GetUninitializedObject(typeof(T));
+        private static void S(object o, string p, object? v) => o.GetType().GetProperty(p)!.SetValue(o, v);
+
+        private static WeightCapturedEventDto Weight(double kg, string scaleId)
+        {
+            var w = U<WeightCapturedEventDto>();
+            S(w, "WeightKg", kg);
+            try { S(w, "ScaleId", scaleId); } catch { }
+            return w;
+        }
+
+        // ── OneGateActivity ────────────────────────────────────────────────────
+        [Activity("UpsertTripFromQR")]
+        public TripDto UpsertTripFromQRAsync(QrCheckpointEventDto qr) => new()
+        {
+            TripId = $"{qr.PlantId}_{qr.PlateOrTag}_20260701T0800Z",
+            PlateOrTag = qr.PlateOrTag,
+            PlantId = qr.PlantId,
+            State = TripState.ArrivedDetected,
+            ArrivalTimestamp = DateTimeOffset.UtcNow,
+        };
+
+        [Activity("ValidateGateAccess")]
+        public GateValidateAccessResponse ValidateGateAccessAsync(GateValidateAccessRequest r)
+        {
+            var blocked = r.Placa is "ABC-123" or "XYZ-999" or "TMP-456";
+            return new GateValidateAccessResponse
+            {
+                Blocked = blocked,
+                Decision = blocked ? "RECHAZADO" : "APROBADO",
+                Tipo = blocked ? "PLACA" : null,
+                Motivo = blocked ? $"Placa {r.Placa} en lista negra." : null,
+            };
+        }
+
+        [Activity("ConsultaListaBlanca")]
+        public WhitelistConsultaResponse ConsultaListaBlancaAsync(string cup, string tripId)
+            => U<WhitelistConsultaResponse>();
+
+        [Activity("EvaluarRevisionAleatoria")]
+        public EvaluarRevisionAleatoriaResponse EvaluarRevisionAleatoriaAsync(EvaluarRevisionAleatoriaRequest r)
+            => U<EvaluarRevisionAleatoriaResponse>();
+
+        [Activity("DeterminarDestino")]
+        public DeterminarDestinoResponse DeterminarDestinoAsync(string codigoTipoVisita, string tripId)
+            => new(codigoTipoVisita, _c.Pesable, _c.Pesable ? "BASCULA" : "ALMACEN");
+
+        [Activity("PatchTripState")]
+        public Task PatchTripStateAsync(string tripId, string state,
+            Dictionary<string, string>? metadata = null, string? changedBy = null)
+        {
+            _c.Calls.Enqueue($"patch:{state}");
+            return Task.CompletedTask;
+        }
+
+        [Activity("ValidateWeightDelta")]
+        public WeightDeltaValidationResult ValidateWeightDeltaAsync(
+            string tripId, double entryWeightKg, double exitWeightKg, double thresholdPercent = 2.0)
+        {
+            var deltaKg = entryWeightKg - exitWeightKg;
+            var deltaPercent = Math.Abs(deltaKg / entryWeightKg * 100);
+            return new WeightDeltaValidationResult
+            {
+                IsInRange = deltaPercent <= thresholdPercent,
+                DeltaKg = deltaKg, DeltaPercent = deltaPercent, ThresholdPercent = thresholdPercent,
+                EntryWeightKg = entryWeightKg, ExitWeightKg = exitWeightKg,
+            };
+        }
+
+        [Activity("RouteToYard")]
+        public string RouteToYardAsync(string tripId, string primaryMaterialCode, string? targetState = null) => "ZONA-A";
+
+        [Activity("StartUnloadingSession")]
+        public string StartUnloadingSessionAsync(string tripId) => "SESSION-001";
+
+        // ── ScaleActivity ──────────────────────────────────────────────────────
+        [Activity("CaptureEntryWeight")]
+        public WeightCapturedEventDto CaptureEntryWeightAsync(string tripId, string scaleId)
+        {
+            if (_c.EntryScaleFails)
+                throw new ApplicationException("Báscula de entrada no responde.");
+            return Weight(_c.EntryWeightKg, scaleId);
+        }
+
+        [Activity("CaptureExitWeight")]
+        public WeightCapturedEventDto CaptureExitWeightAsync(string tripId, string scaleId)
+        {
+            if (_c.ExitScaleFails)
+                throw new ApplicationException("Báscula de salida no responde.");
+            return Weight(_c.ExitWeightKg, scaleId);
+        }
+
+        // ── RadiationActivity ──────────────────────────────────────────────────
+        [Activity("ReadRadiation")]
+        public RadiationResultDto ReadRadiationAsync(string tripId, string deviceId)
+        {
+            var r = U<RadiationResultDto>();
+            S(r, "Status", _c.RadiationAlarm ? RadiationStatus.Alarm : RadiationStatus.Ok);
+            try { S(r, "DeviceId", deviceId); } catch { }
+            return r;
+        }
+
+        // ── ScrapGradingActivity ───────────────────────────────────────────────
+        [Activity("RequestPreGrading")]
+        public string RequestPreGradingAsync(string tripId, string plateOrTag) => "PREGRAD-001";
+
+        [Activity("ReceiveFinalGrading")]
+        public GradingResultDto ReceiveFinalGradingAsync(GradingResultDto gradingResult)
+        {
+            try { if (gradingResult.PrimaryMaterialCode is null) S(gradingResult, "PrimaryMaterialCode", "FE-001"); } catch { }
+            try { if (gradingResult.TicketId is null) S(gradingResult, "TicketId", "TCK-001"); } catch { }
+            return gradingResult;
+        }
+
+        // ── AceriaActivity (traspaso + Mercancías en Tránsito) ──────────────────
+        [Activity("GetTransferPedido")]
+        public TransferPedidoResult GetTransferPedidoAsync(string tripId, string numeroTraspaso, string plateOrTag)
+            => new()
+            {
+                NumeroTraspaso      = numeroTraspaso,
+                ClaPedido           = $"PED-{numeroTraspaso}",
+                ClaAlmacenDestino   = "ALM-CHAT-01",
+                ClaUbicacionOrigen  = "MONTERREY",
+                ClaUbicacionDestino = "CELAYA",
+                NomUbicacionOrigen  = "Planta Monterrey",
+                NomUbicacionDestino = "Planta Celaya",
+                PesajeOrigenKg      = 30000.0,
+                Placas              = plateOrTag,
+            };
+
+        [Activity("CreateTransferMovimiento")]
+        public string CreateTransferMovimientoAsync(string tripId, TransferMovimientoRequest req)
+        {
+            if (_c.AceriaThrows)
+                throw new ApplicationException("Acería no responde al crear el movimiento de traspaso.");
+            return "MOV-001";
+        }
+
+        [Activity("CloseTransferMovimiento")]
+        public TransferMovimientoResult CloseTransferMovimientoAsync(string tripId, string movimientoId)
+        {
+            _c.Calls.Enqueue("close");
+            return new TransferMovimientoResult
+            {
+                MovimientoClosed = _c.MovimientoCloses, NumViaje = "VTA-003001", Estatus = -1, EsRecepcionTraspaso = false,
+            };
+        }
+
+        [Activity("NotificarLlegadaTraspaso")]
+        public TransferLlegadaResult NotificarLlegadaTraspasoAsync(string tripId, string numeroTraspaso)
+        {
+            _c.Calls.Enqueue("llegada");
+            if (_c.LlegadaThrows)
+                throw new ApplicationException("Mercancías en Tránsito no responde (llegada).");
+            return new TransferLlegadaResult { TripArrived = true, NumViaje = "VTA-LL-0001", Estatus = 1 };
+        }
+
+        // ── WtSampActivity ─────────────────────────────────────────────────────
+        [Activity("CloseGateExit")]
+        public bool CloseGateExitAsync(string tripId, string vehicleId) => true;
+    }
+
+    // ── Runner ──────────────────────────────────────────────────────────────────
+    private static async Task<WorkflowResult> RunAsync(
+        ScenarioConfig cfg,
+        TruckScrapTransferInput input,
+        Func<WorkflowHandle<_1006_TruckScrapTransferWorkflow>, Task>? sendSignals = null)
+    {
+        await using var env = await WorkflowEnvironment.StartTimeSkippingAsync();
+
+        var mocks = new MockActivities(cfg);
+        using var worker = new TemporalWorker(
+            env.Client,
+            new TemporalWorkerOptions(TaskQueue)
+                .AddAllActivities(mocks)
+                .AddWorkflow<_1006_TruckScrapTransferWorkflow>());
+
+        return await worker.ExecuteAsync(async () =>
+        {
+            var handle = await env.Client.StartWorkflowAsync(
+                (_1006_TruckScrapTransferWorkflow wf) => wf.ExecuteAsync(input),
+                new WorkflowOptions($"transfer-1006-{Guid.NewGuid():N}", TaskQueue));
+
+            if (sendSignals is not null)
+                await sendSignals(handle);
+
+            return await handle.GetResultAsync();
+        });
+    }
+
+    private static TruckScrapTransferInput Input(string plate = "TRAS-001", int sla = 60, double refKg = 18000.0) => new()
+    {
+        PlantId = "CELAYA",
+        PlateOrTag = plate,
+        CheckpointId = "CPA",
+        ArrivalTimestamp = DateTimeOffset.UtcNow,
+        CorrelationId = $"preregistration-TEST-{plate}",
+        CodigoTipoVisita = "TRASPASO",
+        SupplierId = "UNIDAD-INT-01",
+        TransferOrderId = "TRAS-2026-0001",
+        OriginPlantId = "MONTERREY",
+        DestinationPlantId = "CELAYA",
+        ClaAlmacenDestino = "ALM-CHAT-01",
+        ReferenciaTraspasoKg = refKg,
+        HumanLoopSlaMinutes = sla,
+        WeightDeltaThresholdPercent = 2.0,
+    };
+
+    // ── Señales (todas en buffer) ────────────────────────────────────────────────
+    private static Task Access(WorkflowHandle<_1006_TruckScrapTransferWorkflow> h)
+        => h.SignalAsync(wf => wf.AccessConfirmedAsync(new AccessConfirmationSignalDto { RealizadoPor = "guardia1" }));
+    /// <summary>
+    /// Llegada a la báscula: el guardia da el pase y se selecciona la báscula.
+    ///
+    /// <para>El pase va DENTRO del helper porque en la realidad precede siempre a la selección: sin
+    /// el verde el camión no se mueve de la caseta. Desde RF-210 el workflow lo exige (RN-222), así
+    /// que separarlos obligaría a repetir la señal en los cinco casos que usan este helper.</para>
+    /// </summary>
+    private static async Task EntryScale(WorkflowHandle<_1006_TruckScrapTransferWorkflow> h)
+    {
+        await h.SignalAsync(wf => wf.PaseAutorizadoAsync());
+        await h.SignalAsync(wf => wf.ScaleSelectedForEntryAsync("BASCULA-ENTRADA-01"));
+    }
+    private static Task CaptureRadiation(WorkflowHandle<_1006_TruckScrapTransferWorkflow> h)
+        => h.SignalAsync(wf => wf.CaptureRadiationResultAsync("RAD-ENTRADA-01"));
+    private static Task ImagesConfirmed(WorkflowHandle<_1006_TruckScrapTransferWorkflow> h)
+        => h.SignalAsync(wf => wf.TransferImagesConfirmedAsync());
+    private static Task PreGrading(WorkflowHandle<_1006_TruckScrapTransferWorkflow> h)
+        => h.SignalAsync(wf => wf.PreGradingResultReceivedAsync(Grading()));
+    private static Task Unloading(WorkflowHandle<_1006_TruckScrapTransferWorkflow> h)
+        => h.SignalAsync(wf => wf.UnloadingCompletedAsync());
+    private static Task FinalGrading(WorkflowHandle<_1006_TruckScrapTransferWorkflow> h)
+        => h.SignalAsync(wf => wf.FinalGradingResultReceivedAsync(Grading()));
+    private static Task ExitScale(WorkflowHandle<_1006_TruckScrapTransferWorkflow> h)
+        => h.SignalAsync(wf => wf.ScaleSelectedForExitAsync("BASCULA-SALIDA-01"));
+
+    // Secuencia feliz completa (radiación automática + imágenes OK).
+    private static async Task DriveHappy(WorkflowHandle<_1006_TruckScrapTransferWorkflow> h)
+    {
+        await Access(h);
+        await EntryScale(h);
+        await CaptureRadiation(h);
+        await ImagesConfirmed(h);
+        await PreGrading(h);
+        await Unloading(h);
+        await FinalGrading(h);
+        await ExitScale(h);
+    }
+
+    // ========================================================================
+    //  CASOS
+    // ========================================================================
+
+    [Fact] // TC01 — happy path: completa y notifica llegada a Mercancías en Tránsito
+    public async Task HappyPath_NotificaLlegada_Completes()
+    {
+        var cfg = new ScenarioConfig();
+        var res = await RunAsync(cfg, Input(), DriveHappy);
+
+        Assert.True(res.Success);
+        Assert.Equal("Completed", res.Data?["FinalState"]?.ToString());
+
+        var calls = cfg.Calls.ToArray();
+        // CA-406-03: la llegada a destino se notificó...
+        Assert.Contains("llegada", calls);
+        // ...y ocurrió ANTES del cierre patrimonial del movimiento (check-in, no salida).
+        Assert.True(Array.IndexOf(calls, "llegada") < Array.IndexOf(calls, "close"),
+            "La notificación de llegada debe ocurrir en el check-in, antes del cierre del movimiento.");
+    }
+
+    [Fact] // TC02 — CA-406-05: el detalle del viaje queda persistido tras el lookup
+    public async Task DetalleDeViaje_SePersiste_TrasLookup()
+    {
+        var cfg = new ScenarioConfig();
+        var res = await RunAsync(cfg, Input(plate: "TRAS-002"), DriveHappy);
+
+        Assert.True(res.Success);
+        Assert.Contains("patch:TRANSFER_TRIP_DETAIL", cfg.Calls.ToArray());
+    }
+
+    [Fact] // TC03 — CA-406-04: Mercancías en Tránsito no responde → MET_SYNC_PENDING, el traspaso continúa
+    public async Task LlegadaFalla_MarcaPendienteYContinua()
+    {
+        var cfg = new ScenarioConfig { LlegadaThrows = true };
+        var res = await RunAsync(cfg, Input(plate: "TRAS-003"), DriveHappy);
+
+        Assert.True(res.Success);   // NO aborta
+        Assert.Equal("Completed", res.Data?["FinalState"]?.ToString());
+
+        var calls = cfg.Calls.ToArray();
+        Assert.Contains("patch:MET_SYNC_PENDING", calls);
+        // El traspaso siguió y cerró el movimiento pese al fallo de la notificación.
+        Assert.Contains("close", calls);
+    }
+
+    [Fact] // TC04 — no regresión: input inválido (sin TransferOrderId)
+    public async Task InvalidInput_FailsValidation()
+    {
+        var bad = Input(plate: "TRAS-004") with { TransferOrderId = null };
+        var res = await RunAsync(new ScenarioConfig(), bad);
+        Assert.False(res.Success);
+        Assert.Equal("VALIDATION_ERROR", res.ErrorCode);
+    }
+
+    [Fact] // TC05 — no regresión: radiación ALARM sigue siendo hard-stop
+    public async Task RadiationAlarm_HardStop()
+    {
+        var res = await RunAsync(new ScenarioConfig { RadiationAlarm = true }, Input(plate: "TRAS-005"), async h =>
+        {
+            await Access(h);
+            await EntryScale(h);
+            await CaptureRadiation(h);
+        });
+        Assert.False(res.Success);
+        Assert.Equal("RADIATION_ALARM", res.ErrorCode);
+    }
+
+    [Fact] // TC06 — no regresión: destino no pesable → almacén directo (sin notificar llegada)
+    public async Task NonWeighable_Warehouse()
+    {
+        // La unidad no pesable AHORA PASA POR EL GUARDIA: RF-208 determina el destino "una vez
+        // completado el proceso de validación", no antes. Sin Access() agota el timeout de 4h.
+        var cfg = new ScenarioConfig { Pesable = false };
+        var res = await RunAsync(cfg, Input(plate: "TRAS-006"), Access);
+        Assert.True(res.Success);
+        Assert.Equal("ALMACEN_DIRECTO", res.Data?["result"]?.ToString());
+        // Y se registra A QUÉ almacén va (CA-208-04).
+        Assert.False(string.IsNullOrWhiteSpace(res.Data?["assignedZone"]?.ToString()));
+        Assert.DoesNotContain("llegada", cfg.Calls.ToArray());
+    }
+
+    // ── Señales adicionales para los casos ampliados ─────────────────────────────
+    private static Task ImagesRejected(WorkflowHandle<_1006_TruckScrapTransferWorkflow> h)
+        => h.SignalAsync(wf => wf.TransferImagesRejectedAsync("material no coincide con imágenes de origen"));
+    private static Task Approve(WorkflowHandle<_1006_TruckScrapTransferWorkflow> h)
+        => h.SignalAsync(wf => wf.AdjustmentApprovedAsync());
+
+    // Conduce hasta un punto y deja que el resto expire (para timeouts).
+    private static async Task Until(WorkflowHandle<_1006_TruckScrapTransferWorkflow> h, string stop)
+    {
+        await Access(h);
+        if (stop == "afterAccess") return;
+        await EntryScale(h);
+        if (stop == "afterEntryScale") return;
+        await CaptureRadiation(h);
+        if (stop == "afterRadiation") return;
+        await ImagesConfirmed(h);
+        if (stop == "afterImages") return;
+        await PreGrading(h);
+        if (stop == "afterPreGrading") return;
+        await Unloading(h);
+        if (stop == "afterUnloading") return;
+        await FinalGrading(h);
+        if (stop == "afterFinalGrading") return;
+        await ExitScale(h);
+    }
+
+    // ========================================================================
+    //  CASOS AMPLIADOS (cobertura completa de caminos terminales)
+    // ========================================================================
+
+    [Fact] // TC07 — peso de entrada manual (báscula falla, llega manual)
+    public async Task EntryWeight_ManualFallback_Completes()
+    {
+        var res = await RunAsync(new ScenarioConfig { EntryScaleFails = true }, Input(plate: "TRAS-007"), async h =>
+        {
+            await Access(h); await EntryScale(h);
+            await h.SignalAsync(wf => wf.EntryWeightManualAsync("30000.00"));
+            await CaptureRadiation(h); await ImagesConfirmed(h);
+            await PreGrading(h); await Unloading(h); await FinalGrading(h); await ExitScale(h);
+        });
+        Assert.True(res.Success, $"ErrorCode={res.ErrorCode} | Msg={res.ErrorMessage}");
+    }
+
+    [Fact] // TC08 — peso de salida manual (báscula salida falla, llega manual)
+    public async Task ExitWeight_ManualFallback_Completes()
+    {
+        var res = await RunAsync(new ScenarioConfig { ExitScaleFails = true }, Input(plate: "TRAS-008"), async h =>
+        {
+            await DriveHappy(h);
+            await h.SignalAsync(wf => wf.ExitWeightManualAsync("12000.00"));
+        });
+        Assert.True(res.Success, $"ErrorCode={res.ErrorCode} | Msg={res.ErrorMessage}");
+    }
+
+    [Fact] // TC09 — radiación manual PASSED (sin dispositivo)
+    public async Task RadiationManual_Passed_Completes()
+    {
+        var res = await RunAsync(new ScenarioConfig(), Input(plate: "TRAS-009"), async h =>
+        {
+            await Access(h); await EntryScale(h);
+            await h.SignalAsync(wf => wf.RadiationManualResultAsync("RAD-01", "PASSED"));
+            await ImagesConfirmed(h); await PreGrading(h);
+            await Unloading(h); await FinalGrading(h); await ExitScale(h);
+        });
+        Assert.True(res.Success, $"ErrorCode={res.ErrorCode} | Msg={res.ErrorMessage}");
+    }
+
+    [Fact] // TC10 — imágenes de origen rechazadas → CANCELLED (hard-stop)
+    public async Task OriginImagesRejected_Cancelled()
+    {
+        var res = await RunAsync(new ScenarioConfig(), Input(plate: "TRAS-010"), async h =>
+        {
+            await Access(h); await EntryScale(h); await CaptureRadiation(h);
+            await ImagesRejected(h);
+        });
+        Assert.False(res.Success);
+        Assert.Equal("ORIGIN_IMAGES_REJECTED", res.ErrorCode);
+    }
+
+    [Fact] // TC11 — lista negra
+    public async Task Blacklist_Blocked()
+    {
+        var res = await RunAsync(new ScenarioConfig(), Input(plate: "ABC-123"));
+        Assert.False(res.Success);
+        Assert.Equal("LISTA_NEGRA_BLOCKED", res.ErrorCode);
+    }
+
+    [Fact] // TC12 — acceso rechazado por guardia
+    public async Task AccessRejected()
+    {
+        var res = await RunAsync(new ScenarioConfig(), Input(plate: "TRAS-012"), h =>
+            h.SignalAsync(wf => wf.AccessRejectedAsync(
+                new AccessRejectionSignalDto { Motivo = "docs vencidos", RealizadoPor = "guardia1" })));
+        Assert.False(res.Success);
+        Assert.Equal("ACCESS_REJECTED_BY_GUARD", res.ErrorCode);
+    }
+
+    [Fact] // TC13 — timeout de confirmación de acceso
+    public async Task AccessTimeout()
+    {
+        var res = await RunAsync(new ScenarioConfig(), Input(plate: "TRAS-013"));
+        Assert.False(res.Success);
+        Assert.Equal("ACCESS_CONFIRMATION_TIMEOUT", res.ErrorCode);
+    }
+
+    [Fact] // TC14 — timeout de báscula de entrada
+    public async Task EntryScaleTimeout()
+    {
+        var res = await RunAsync(new ScenarioConfig(), Input(plate: "TRAS-014"), h => Until(h, "afterAccess"));
+        Assert.False(res.Success);
+        Assert.Equal("ENTRY_SCALE_TIMEOUT", res.ErrorCode);
+    }
+
+    [Fact] // TC15 — timeout de sensor de radiación
+    public async Task RadiationSensorTimeout()
+    {
+        var res = await RunAsync(new ScenarioConfig(), Input(plate: "TRAS-015"), h => Until(h, "afterEntryScale"));
+        Assert.False(res.Success);
+        Assert.Equal("RADIATION_SENSOR_TIMEOUT", res.ErrorCode);
+    }
+
+    [Fact] // TC16 — timeout de validación de imágenes de origen
+    public async Task OriginImagesTimeout()
+    {
+        var res = await RunAsync(new ScenarioConfig(), Input(plate: "TRAS-016", sla: 30), h => Until(h, "afterRadiation"));
+        Assert.False(res.Success);
+        Assert.Equal("ORIGIN_IMAGES_TIMEOUT", res.ErrorCode);
+    }
+
+    [Fact] // TC17 — timeout de preclasificación (4h)
+    public async Task PreGradingTimeout()
+    {
+        var res = await RunAsync(new ScenarioConfig(), Input(plate: "TRAS-017"), h => Until(h, "afterImages"));
+        Assert.False(res.Success);
+        Assert.Equal("PREGRADING_TIMEOUT", res.ErrorCode);
+    }
+
+    [Fact] // TC18 — timeout de descarga (8h)
+    public async Task UnloadingTimeout()
+    {
+        var res = await RunAsync(new ScenarioConfig(), Input(plate: "TRAS-018"), h => Until(h, "afterPreGrading"));
+        Assert.False(res.Success);
+        Assert.Equal("UNLOADING_TIMEOUT", res.ErrorCode);
+    }
+
+    [Fact] // TC19 — timeout de clasificación final (8h)
+    public async Task FinalGradingTimeout()
+    {
+        var res = await RunAsync(new ScenarioConfig(), Input(plate: "TRAS-019"), h => Until(h, "afterUnloading"));
+        Assert.False(res.Success);
+        Assert.Equal("FINALGRADING_TIMEOUT", res.ErrorCode);
+    }
+
+    [Fact] // TC20 — timeout de báscula de salida
+    public async Task ExitScaleTimeout()
+    {
+        var res = await RunAsync(new ScenarioConfig(), Input(plate: "TRAS-020"), h => Until(h, "afterFinalGrading"));
+        Assert.False(res.Success);
+        Assert.Equal("EXIT_SCALE_TIMEOUT", res.ErrorCode);
+    }
+
+    [Fact] // TC21 — neto fuera de rango, supervisor aprueba
+    public async Task DeltaOutOfRange_Approved_Completes()
+    {
+        // neto = 30000 - 5000 = 25000 vs ref 18000 → fuera de ±2%
+        var res = await RunAsync(new ScenarioConfig { ExitWeightKg = 5000.0 },
+            Input(plate: "TRAS-021", sla: 100000), async h =>
+        {
+            await DriveHappy(h);
+            for (var i = 0; i < 40; i++)
+            {
+                try { await h.SignalAsync(wf => wf.AdjustmentApprovedAsync()); }
+                catch { break; }
+                var desc = await h.DescribeAsync();
+                if (desc.Status.ToString() != "Running") break;
+                await Task.Delay(20);
+            }
+        });
+        Assert.True(res.Success, $"ErrorCode={res.ErrorCode} | Msg={res.ErrorMessage}");
+    }
+
+    [Fact] // TC22 — neto fuera de rango, nadie aprueba
+    public async Task DeltaOutOfRange_NoApproval_TimesOut()
+    {
+        var res = await RunAsync(new ScenarioConfig { ExitWeightKg = 5000.0 },
+            Input(plate: "TRAS-022", sla: 45), DriveHappy);
+        Assert.False(res.Success);
+        Assert.Equal("WEIGHT_DELTA_SLA_TIMEOUT", res.ErrorCode);
+    }
+
+    [Fact] // TC23 — el cierre del movimiento de traspaso falla (negocio)
+    public async Task MovimientoCloseFails()
+    {
+        var res = await RunAsync(new ScenarioConfig { MovimientoCloses = false }, Input(plate: "TRAS-023"), DriveHappy);
+        Assert.False(res.Success);
+        Assert.Equal("TRANSFER_CLOSE_FAILED", res.ErrorCode);
+    }
+
+    [Fact] // TC24 — fallo técnico en Acería (create) → WORKFLOW_ERROR
+    public async Task AceriaThrows_WorkflowError()
+    {
+        var res = await RunAsync(new ScenarioConfig { AceriaThrows = true }, Input(plate: "TRAS-024"), DriveHappy);
+        Assert.False(res.Success);
+        Assert.Equal("WORKFLOW_ERROR", res.ErrorCode);
+    }
+}

@@ -11,13 +11,22 @@ kept deliberately simple — see README.md for the full walkthrough of the two t
 
 ## Build / run
 
-No test project or CI test step exists in this repo (`.gitlab-ci.yml` only builds Doxygen docs
-for GitLab Pages). There is no `dotnet test` to run.
-
 Build the whole solution:
 ```powershell
 dotnet build ReleaseOrderDemo.sln
 ```
+
+Tests (`test/ReleaseOrder.Tests/`, xUnit + Temporal time-skipping):
+```powershell
+dotnet test ReleaseOrderDemo.sln
+```
+`ReleaseOrderWorkflowTests` covers README Pruebas A/B (Signal approved / rejected) against the real
+`ReleaseOrderWorkflow` + `ShippingWorkflow` + Activities + Services; only the SQL edge
+(`IOrderStateMachine`, the repos) is faked in memory (`Fakes/`), so no Docker or SQL Server is
+needed. `WorkflowEnvironment.StartTimeSkippingAsync` fast-forwards the two demo `Workflow.DelayAsync`
+calls (5s + 10s) in `ReleaseOrderWorkFlow.cs`, so the suite runs in ~1s. First run downloads the
+time-skipping test server binary (needs network once, then cached in the user profile).
+CI still has no test step (`.gitlab-ci.yml` only builds Doxygen docs for GitLab Pages).
 
 Run everything via Docker Compose (from `docker/`):
 ```powershell
