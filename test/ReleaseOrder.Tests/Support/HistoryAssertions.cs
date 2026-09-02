@@ -1,4 +1,5 @@
 using Google.Protobuf;
+using Temporalio.Api.Enums.V1;
 using Temporalio.Api.History.V1;
 using Temporalio.Api.WorkflowService.V1;
 using Temporalio.Client;
@@ -91,6 +92,17 @@ public sealed class HistoryAssertions
             .Select(a => a.Failure?.ApplicationFailureInfo?.Type)
             .LastOrDefault(type => !string.IsNullOrEmpty(type));
     }
+
+    /// <summary>Cantidad de eventos de <paramref name="type"/> en la historia.</summary>
+    public int CountEventType(EventType type) => _events.Count(e => e.EventType == type);
+
+    /// <summary>
+    /// <c>true</c> si la historia contiene al menos un evento de <paramref name="type"/>.
+    /// Para asertar desde la historia del <b>padre</b> que hubo
+    /// <c>StartChildWorkflowExecutionInitiated</c> y que el hijo cerró en
+    /// <c>ChildWorkflowExecutionFailed</c> vs <c>ChildWorkflowExecutionCompleted</c>.
+    /// </summary>
+    public bool ContainsEventType(EventType type) => CountEventType(type) > 0;
 
     /// <summary>
     /// EventIds de los <c>ActivityTaskScheduled</c> de la actividad pedida. Los eventos

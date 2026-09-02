@@ -3,6 +3,7 @@ using ReleaseOrder.Tests.Fakes;
 using ReleaseOrderDemo.Activities;
 using ReleaseOrderDemo.Services;
 using ReleaseOrderDemo.Workflows;
+using Temporalio.Api.Enums.V1;
 using Temporalio.Client;
 using Temporalio.Exceptions;
 using Temporalio.Testing;
@@ -69,14 +70,49 @@ public static class ReleaseOrderTestEnvironment
             // dispose el servidor embebido — el test ya no tendría cómo pedirla.
             var history = await HistoryAssertions.FetchAsync(env.Client, handle.Id, handle.ResultRunId);
 
-            return new ReleaseOrderRunResult(result, db, finalStatus, history);
+            var child = await TryFetchChildFactsAsync(env.Client, orderId);
+
+            return new ReleaseOrderRunResult(result, db, finalStatus, history, child);
         });
+    }
+
+    /// <summary>
+    /// El Child Workflow <c>ShippingWorkflow</c> usa el Id determinístico
+    /// <c>shipping-order-{orderId}</c>, así que se lo puede describir/leer sin haber guardado
+    /// su handle. Devuelve <c>null</c> si nunca arrancó (el padre falló antes del envío) — ese
+    /// <c>null</c> es el caso esperado, no un error.
+    /// </summary>
+    private static async Task<ShippingChildFacts?> TryFetchChildFactsAsync(
+        ITemporalClient client, int orderId)
+    {
+        var childId = $"shipping-order-{orderId}";
+        try
+        {
+            var description = await client.GetWorkflowHandle(childId).DescribeAsync();
+            var childHistory = await HistoryAssertions.FetchAsync(client, childId, runId: null);
+            return new ShippingChildFacts(childId, description.Status, childHistory);
+        }
+        catch (RpcException e) when (e.Code == RpcException.StatusCode.NotFound)
+        {
+            return null;
+        }
     }
 }
 
-/// <summary>Resultado de una corrida: string devuelto por el workflow, estado de la BD fake, última Query e historia.</summary>
+/// <summary>
+/// Resultado de una corrida: string devuelto por el workflow, estado de la BD fake, última
+/// Query, historia del padre y — si llegó a arrancar — los hechos del Child Workflow.
+/// </summary>
 public sealed record ReleaseOrderRunResult(
-    string Result, FakeOrderDatabase Db, string FinalStatus, HistoryAssertions History);
+    string Result,
+    FakeOrderDatabase Db,
+    string FinalStatus,
+    HistoryAssertions History,
+    ShippingChildFacts? Child);
+
+/// <summary>Ejecución independiente del Child Workflow <c>ShippingWorkflow</c>: su Id, su estado final y su propia historia.</summary>
+public sealed record ShippingChildFacts(
+    string WorkflowId, WorkflowExecutionStatus Status, HistoryAssertions History);
 
 /// <summary>Handle + entorno, con el helper de espera sobre la Query <c>GetStatus</c>.</summary>
 public sealed class ReleaseOrderDriveContext
