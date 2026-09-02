@@ -4,6 +4,7 @@ using ReleaseOrderDemo.Activities;
 using ReleaseOrderDemo.Services;
 using ReleaseOrderDemo.Workflows;
 using Temporalio.Client;
+using Temporalio.Exceptions;
 using Temporalio.Testing;
 using Temporalio.Worker;
 using Xunit;
@@ -64,13 +65,18 @@ public static class ReleaseOrderTestEnvironment
             var result = await handle.GetResultAsync();
             var finalStatus = await handle.QueryAsync(wf => wf.GetStatus());
 
-            return new ReleaseOrderRunResult(result, db, finalStatus);
+            // La historia se lee acá, antes de que el `await using var env` de arriba
+            // dispose el servidor embebido — el test ya no tendría cómo pedirla.
+            var history = await HistoryAssertions.FetchAsync(env.Client, handle.Id, handle.ResultRunId);
+
+            return new ReleaseOrderRunResult(result, db, finalStatus, history);
         });
     }
 }
 
-/// <summary>Resultado de una corrida: string devuelto por el workflow, estado de la BD fake y última Query.</summary>
-public sealed record ReleaseOrderRunResult(string Result, FakeOrderDatabase Db, string FinalStatus);
+/// <summary>Resultado de una corrida: string devuelto por el workflow, estado de la BD fake, última Query e historia.</summary>
+public sealed record ReleaseOrderRunResult(
+    string Result, FakeOrderDatabase Db, string FinalStatus, HistoryAssertions History);
 
 /// <summary>Handle + entorno, con el helper de espera sobre la Query <c>GetStatus</c>.</summary>
 public sealed class ReleaseOrderDriveContext
@@ -85,6 +91,30 @@ public sealed class ReleaseOrderDriveContext
     }
 
     public WorkflowHandle<ReleaseOrderWorkflow, string> Handle { get; }
+
+    /// <summary>
+    /// Envía la decisión por <c>[WorkflowSignal]</c> — envoltorio simétrico de
+    /// <see cref="SubmitDecisionUpdateAsync"/> para que los tests lean parejo. La Signal no
+    /// devuelve resultado de negocio y siempre se acepta (sin validador).
+    /// </summary>
+    public Task SubmitDecisionSignalAsync(ReleaseDecision decision) =>
+        Handle.SignalAsync(wf => wf.SubmitReleaseDecisionAsync(decision));
+
+    /// <summary>
+    /// Envía la decisión por <c>[WorkflowUpdate]</c> y devuelve el string de negocio, síncrono
+    /// (a diferencia de la Signal). Si el <c>[WorkflowUpdateValidator]</c> rechaza, lanza
+    /// <see cref="WorkflowUpdateFailedException"/> — ver <see cref="ExpectUpdateRejectedAsync"/>.
+    /// </summary>
+    public Task<string> SubmitDecisionUpdateAsync(ReleaseDecision decision) =>
+        Handle.ExecuteUpdateAsync(wf => wf.SubmitReleaseDecisionUpdateAsync(decision));
+
+    /// <summary>
+    /// Espera que el validador del Update rechace la decisión y devuelve la excepción para
+    /// asertar sobre su causa (el <c>ApplicationFailureException</c> que envuelve el mensaje
+    /// del validador). El rechazo no deja evento en el Event History.
+    /// </summary>
+    public Task<WorkflowUpdateFailedException> ExpectUpdateRejectedAsync(ReleaseDecision decision) =>
+        Assert.ThrowsAsync<WorkflowUpdateFailedException>(() => SubmitDecisionUpdateAsync(decision));
 
     /// <summary>
     /// Consulta la Query <c>GetStatus</c> hasta ver <paramref name="target"/>, empujando el reloj
