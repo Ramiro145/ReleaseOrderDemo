@@ -51,6 +51,13 @@ public sealed class FakeOrderStateMachine : IOrderStateMachine
 
         _db.Stock[productId] = _db.Stock.GetValueOrDefault(productId) + quantity;
         _db.SetStatus(orderId, "InventoryCanceled");
+
+        // La sonda de replay (si el test la armó) lanza ACÁ, con el efecto ya aplicado y el
+        // Status ya avanzado — la ventana exacta que el at-least-once de Temporal explota. El
+        // reintento cae arriba en el chequeo de "InventoryCanceled" y devuelve AlreadyApplied,
+        // así que el stock no se incrementa dos veces.
+        _db.ThrowIfProbeArmed(nameof(TryCancelInventoryAsync));
+
         return Task.FromResult(StepOutcome.Applied);
     }
 

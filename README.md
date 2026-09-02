@@ -333,14 +333,33 @@ Repite la Prueba B (Signal rechazada) o la Prueba C.2 (`Address` con `FAIL`): si
 
 ## Prueba G: tests automatizados con time-skipping
 
-`test/ReleaseOrder.Tests/` (xUnit) prueba las Pruebas A y B (Signal aprobada /
-rechazada) sin Docker ni SQL Server, con el reloj de Temporal acelerado.
+`test/ReleaseOrder.Tests/` (xUnit) cubre las Pruebas **A–F** sobre `ReleaseOrderWorkflow`
+(SAGA + Signal/Update + su Child `ShippingWorkflow`) sin Docker ni SQL Server, con el
+reloj de Temporal acelerado — 13 tests en ~0.8s.
 
 ```powershell
 dotnet test ReleaseOrderDemo.sln
-# o solo esta clase:
+# o una sola clase:
 dotnet test --filter "ReleaseOrderWorkflowTests"
 ```
+
+| Clase | Prueba(s) | Qué fija |
+| --- | --- | --- |
+| `ReleaseOrderWorkflowTests` | A, B, C.1 | Signal aprobada/rechazada, compensación LIFO, camino feliz del Child Workflow |
+| `ReleaseOrderUpdateDecisionTests` | D | decisión vía `[WorkflowUpdate]` (resultado síncrono), rechazo del `[WorkflowUpdateValidator]`, "la primera decisión gana" |
+| `ReleaseOrderRetryPolicyTests` | E | reintentable (3 intentos) vs no-reintentable por la Activity vs no-reintentable por el Workflow |
+| `ReleaseOrderChildWorkflowTests` | C.2 | fallo del Child Workflow (agota sus reintentos propios) propagándose al SAGA padre |
+| `ReleaseOrderIdempotencyTests` | F | replay probe: el efecto se aplica una sola vez pese al reintento; compensación reintentada que no restaura stock de más |
+
+Dos piezas de infra de test propias:
+
+- **`Support/HistoryAssertions.cs`** — lee el Event History vía
+  `WorkflowService.GetWorkflowExecutionHistoryAsync` (Temporalio 1.9.0 no lo expone desde
+  el `WorkflowHandle`) para contar intentos de una Activity y leer su `errorType`, y para
+  asertar eventos de Child Workflow en la historia del padre.
+- **`Fakes/FakeOrderDatabase.FailAfterEffect(...)`** — arma una sonda que aplica el efecto
+  de un paso de `IOrderStateMachine` y **después** lanza, reproduciendo la ventana del
+  at-least-once que la Prueba F.3 necesita.
 
 Tres piezas, igual que en cualquier suite de Temporal:
 
@@ -356,8 +375,9 @@ Tres piezas, igual que en cualquier suite de Temporal:
    de transiciones de `specs/03-idempotencia-por-estado.md`.
 3. **`await worker.ExecuteAsync(async () => { ... })`** — arranca el workflow,
    espera con la Query `GetStatus` hasta `"Waiting for release decision"`, manda
-   la Signal (`SubmitReleaseDecisionAsync`) y compara el resultado, el recorrido
-   de `Orders.Status`, el stock y las filas de envío.
+   la Signal (`SubmitReleaseDecisionAsync`) o el Update, y compara el resultado, el
+   recorrido de `Orders.Status`, el stock, las filas de envío y el Event History
+   (intentos de Activity, eventos de Child Workflow).
 
 La primera corrida descarga el binario del test server (necesita red una vez;
 después queda cacheado en el perfil del usuario).

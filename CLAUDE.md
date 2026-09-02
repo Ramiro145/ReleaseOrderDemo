@@ -20,11 +20,19 @@ Tests (`test/ReleaseOrder.Tests/`, xUnit + Temporal time-skipping):
 ```powershell
 dotnet test ReleaseOrderDemo.sln
 ```
-`ReleaseOrderWorkflowTests` covers README Pruebas A/B (Signal approved / rejected) against the real
-`ReleaseOrderWorkflow` + `ShippingWorkflow` + Activities + Services; only the SQL edge
+The suite covers README Pruebas **A–F** for `ReleaseOrderWorkflow` (SAGA + Signal/Update + its
+`ShippingWorkflow` child) against the real workflows + Activities + Services; only the SQL edge
 (`IOrderStateMachine`, the repos) is faked in memory (`Fakes/`), so no Docker or SQL Server is
-needed. `WorkflowEnvironment.StartTimeSkippingAsync` fast-forwards the two demo `Workflow.DelayAsync`
-calls (5s + 10s) in `ReleaseOrderWorkFlow.cs`, so the suite runs in ~1s. First run downloads the
+needed — 13 tests in ~0.8s. Test classes: `ReleaseOrderWorkflowTests` (A/B + child happy path),
+`ReleaseOrderUpdateDecisionTests` (D — Update result / validator reject / first-decision-wins),
+`ReleaseOrderRetryPolicyTests` (E — retryable vs non-retryable), `ReleaseOrderChildWorkflowTests`
+(C.2 — child failure propagating to the parent SAGA), `ReleaseOrderIdempotencyTests` (F — replay
+probe / retried compensation). `Support/HistoryAssertions.cs` reads the Event History via
+`WorkflowService.GetWorkflowExecutionHistoryAsync` (not exposed on `WorkflowHandle` in Temporalio
+1.9.0) to count Activity attempts and inspect Child Workflow events;
+`Fakes/FakeOrderDatabase.FailAfterEffect(...)` arms a post-effect throw for the F.3 case.
+`WorkflowEnvironment.StartTimeSkippingAsync` fast-forwards the two demo `Workflow.DelayAsync`
+calls (5s + 10s) in `ReleaseOrderWorkFlow.cs`, so the suite runs in seconds. First run downloads the
 time-skipping test server binary (needs network once, then cached in the user profile).
 CI still has no test step (`.gitlab-ci.yml` only builds Doxygen docs for GitLab Pages).
 

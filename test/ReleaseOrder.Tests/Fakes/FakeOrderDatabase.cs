@@ -24,6 +24,34 @@ public sealed class FakeOrderDatabase
     /// <summary>Nombres de los <c>Try*Async</c> de <see cref="FakeOrderStateMachine"/> en orden.</summary>
     public List<string> StateMachineCalls { get; } = new();
 
+    /// <summary>Paso de <see cref="FakeOrderStateMachine"/> → cuántos intentos más debe fallar la sonda de replay.</summary>
+    private readonly Dictionary<string, int> _replayProbes = new();
+
+    /// <summary>
+    /// Arma una sonda de replay sobre <paramref name="stepName"/>: las próximas
+    /// <paramref name="times"/> llamadas a ese paso aplican su efecto y <b>después</b> lanzan
+    /// (ver <see cref="ThrowIfProbeArmed"/>). Reproduce en la compensación la misma ventana que
+    /// <c>PaymentActivities.ReplayProbeAmount</c> fuerza en el camino feliz.
+    /// </summary>
+    public void FailAfterEffect(string stepName, int times = 1) => _replayProbes[stepName] = times;
+
+    /// <summary>
+    /// Si hay una sonda armada para <paramref name="stepName"/>, consume un intento y lanza una
+    /// <see cref="ApplicationException"/> genérica (reintentable). El paso ya avanzó el Status y
+    /// aplicó su efecto de dominio: esto simula la caída del Worker justo antes de reportar
+    /// completitud, así que Temporal reintenta y la guarda de "ya aplicado" tiene que evitar el
+    /// doble efecto.
+    /// </summary>
+    public void ThrowIfProbeArmed(string stepName)
+    {
+        if (_replayProbes.TryGetValue(stepName, out var remaining) && remaining > 0)
+        {
+            _replayProbes[stepName] = remaining - 1;
+            throw new ApplicationException(
+                $"[Fake] Replay probe on '{stepName}': effect already applied, simulating worker crash before completion.");
+        }
+    }
+
     public OrderDto SeedOrder(
         int orderId,
         int productId,
