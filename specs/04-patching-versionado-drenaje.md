@@ -116,9 +116,11 @@ Lo único "nuevo" que se persiste es en la **Event History de Temporal**, no en 
   pasa a `Workflow.Patched(...)` y luego a `Workflow.DeprecatePatch(...)`. Debe ser estable: cambiarlo
   equivale a un patch distinto.
 - **Marker en la historia:** la primera vez que una ejecución evalúa `Workflow.Patched("audit-before-decision")`
-  y devuelve `true`, Temporal escribe un evento `MarkerRecorded` (tipo interno `Version`) con ese
-  `patchId`. En la reproducción, `Patched(...)` devuelve `true` solo si ese marker está en la
-  historia; si no está (ejecución arrancada con el código viejo), devuelve `false` y el `else` corre.
+  y devuelve `true`, Temporal escribe un evento `MarkerRecorded` con ese `patchId`. El SDK .NET usa
+  el sdk-core, así que el `MarkerName` es `"core_patch"` (los SDK Go/Java legacy lo llaman
+  `"Version"`); además se emite un `UpsertWorkflowSearchAttributes` con `TemporalChangeVersion`. En
+  la reproducción, `Patched(...)` devuelve `true` solo si ese marker está en la historia; si no está
+  (ejecución arrancada con el código viejo), devuelve `false` y el `else` corre.
 
 Ciclo de vida del patch (didáctico; en este spec **solo se implementa la fase 1**):
 
@@ -147,7 +149,7 @@ Ciclo de vida del patch (didáctico; en este spec **solo se implementa la fase 1
 4. **`docker-compose.yml`.** `stop_grace_period: 45s` en los tres servicios worker. Commit.
 5. **Tests.** Helper `CountMarkers(string markerName)` en `Support/HistoryAssertions.cs`. Clase
    `ReleaseOrderPatchingTests` con al menos: (a) una corrida Signal-aprobada que asserta
-   `history.CountMarkers("Version") == 1` y una llamada a `RecordAwaitingDecisionAsync` en la
+   `history.CountMarkers("core_patch") == 1` y una llamada a `RecordAwaitingDecisionAsync` en la
    historia; (b) que el string final es el de la Prueba A (el paso de auditoría no altera el
    resultado). Commit.
 6. **README.** Prueba H y Prueba I nuevas; fila `ReleaseOrderPatchingTests` en la tabla de la
@@ -168,8 +170,9 @@ release-orden-worker && docker compose up -d --force-recreate release-orden-work
 - [ ] `dotnet build ReleaseOrderDemo.sln` compila sin errores.
 - [ ] `dotnet test ReleaseOrderDemo.sln` pasa, incluida la clase `ReleaseOrderPatchingTests`.
 - [ ] Un release **nuevo** (Worker con el patch) registra en la Event History un `MarkerRecorded`
-      de tipo `Version` con `patchId = "audit-before-decision"` y un `ActivityTaskCompleted` de
-      `RecordAwaitingDecisionAsync`, y termina en `Completed` con el mismo string que la Prueba A.
+      con `MarkerName = "core_patch"` (el `patchId` `"audit-before-decision"` va en los `Details`) y
+      un `ActivityTaskCompleted` de `RecordAwaitingDecisionAsync`, y termina en `Completed` con el
+      mismo string que la Prueba A.
 - [ ] Un release **arrancado antes** de desplegar el patch, que recibe la Signal **después** del
       redeploy, completa en `Completed` **sin** `WorkflowTaskFailed` / `NonDeterminismError` y
       **sin** ningún evento de `RecordAwaitingDecisionAsync` en su historia.

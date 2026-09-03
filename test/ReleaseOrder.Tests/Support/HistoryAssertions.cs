@@ -97,6 +97,17 @@ public sealed class HistoryAssertions
     public int CountEventType(EventType type) => _events.Count(e => e.EventType == type);
 
     /// <summary>
+    /// Cantidad de eventos <c>MarkerRecorded</c> con <c>MarkerName == </c>
+    /// <paramref name="markerName"/>. <c>Workflow.Patched(...)</c> escribe un marker
+    /// <c>"core_patch"</c> (nombre del sdk-core; los SDK Go/Java legacy usan
+    /// <c>"Version"</c>) la primera vez que una ejecución evalúa el patch y devuelve
+    /// <c>true</c> (spec 04); una ejecución que corre con el código viejo no lo tiene.
+    /// </summary>
+    public int CountMarkers(string markerName) =>
+        _events.Count(e => e.MarkerRecordedEventAttributes is not null &&
+                           e.MarkerRecordedEventAttributes.MarkerName == markerName);
+
+    /// <summary>
     /// <c>true</c> si la historia contiene al menos un evento de <paramref name="type"/>.
     /// Para asertar desde la historia del <b>padre</b> que hubo
     /// <c>StartChildWorkflowExecutionInitiated</c> y que el hijo cerró en
