@@ -92,6 +92,25 @@ public class ReleaseOrderWorkflow : IReleaseOrderWorkflow
                 (PaymentActivities a) => a.RefundPaymentAsync(orderId),
                 CompensationOptions));
 
+            // VERSIONADO DE CÓDIGO (spec 04): este paso de auditoría se agregó después
+            // de que ya hubiera ejecuciones vivas esperando la decisión. Workflow.Patched
+            // deja convivir el código viejo y el nuevo sin NonDeterminismError:
+            //   Fase 1 (acá): if (Workflow.Patched("audit-before-decision")) { nuevo } else { viejo }
+            //     - ejecución nueva: Patched devuelve true, corre el paso y escribe un
+            //       marker "Version" en el Event History.
+            //     - ejecución vieja en vuelo: al reproducir su historia no encuentra el
+            //       marker, Patched devuelve false y toma el else (que no hacía nada acá).
+            //   Fase 2 (cuando no quede ninguna ejecución vieja abierta ni consultable):
+            //     Workflow.DeprecatePatch("audit-before-decision"); y se borra el else.
+            //   Fase 3 (cuando ni siquiera se reproduzcan historias viejas):
+            //     se borra también el DeprecatePatch y queda solo el paso nuevo.
+            if (Workflow.Patched("audit-before-decision"))
+            {
+                await Workflow.ExecuteActivityAsync(
+                    (AuditActivities a) => a.RecordAwaitingDecisionAsync(orderId),
+                    DefaultOptions);
+            }
+
             // El Workflow queda durablemente abierto hasta recibir la Signal.
             // No realiza polling y no mantiene ocupado un hilo del Worker.
             _status = "Waiting for release decision";

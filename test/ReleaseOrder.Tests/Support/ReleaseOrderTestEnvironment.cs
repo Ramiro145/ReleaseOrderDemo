@@ -51,6 +51,7 @@ public static class ReleaseOrderTestEnvironment
                 .AddAllActivities(new ShippingActivities(shipping))
                 .AddAllActivities(new OrderStatusActivities(new FakeOrderRepository(db)))
                 .AddAllActivities(new OrderLookupActivities(new FakeOrderRepository(db)))
+                .AddAllActivities(new AuditActivities())
                 .AddWorkflow<ReleaseOrderWorkflow>()
                 .AddWorkflow<ShippingWorkflow>());
 
