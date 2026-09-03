@@ -97,7 +97,8 @@ public class ReleaseOrderWorkflow : IReleaseOrderWorkflow
             // deja convivir el código viejo y el nuevo sin NonDeterminismError:
             //   Fase 1 (acá): if (Workflow.Patched("audit-before-decision")) { nuevo } else { viejo }
             //     - ejecución nueva: Patched devuelve true, corre el paso y escribe un
-            //       marker "Version" en el Event History.
+            //       marker "core_patch" (nombre del sdk-core) en el Event History, más un
+            //       UpsertWorkflowSearchAttributes con TemporalChangeVersion.
             //     - ejecución vieja en vuelo: al reproducir su historia no encuentra el
             //       marker, Patched devuelve false y toma el else (que no hacía nada acá).
             //   Fase 2 (cuando no quede ninguna ejecución vieja abierta ni consultable):

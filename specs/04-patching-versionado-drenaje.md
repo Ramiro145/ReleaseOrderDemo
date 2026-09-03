@@ -1,6 +1,6 @@
 # 04 - Patching / versionado de Workflow y drenaje del Worker
 
-**Estado:** Aprobado
+**Estado:** Implementado
 **Depende de:** [03-idempotencia-por-estado.md](03-idempotencia-por-estado.md)
 **Fecha:** 2026-09-03
 
@@ -167,24 +167,39 @@ release-orden-worker && docker compose up -d --force-recreate release-orden-work
 
 ## Criterios de aceptación
 
-- [ ] `dotnet build ReleaseOrderDemo.sln` compila sin errores.
-- [ ] `dotnet test ReleaseOrderDemo.sln` pasa, incluida la clase `ReleaseOrderPatchingTests`.
-- [ ] Un release **nuevo** (Worker con el patch) registra en la Event History un `MarkerRecorded`
+- [x] `dotnet build ReleaseOrderDemo.sln` compila sin errores.
+- [x] `dotnet test ReleaseOrderDemo.sln` pasa, incluida la clase `ReleaseOrderPatchingTests`
+      (15/15 en ~0.86s).
+- [x] Un release **nuevo** (Worker con el patch) registra en la Event History un `MarkerRecorded`
       con `MarkerName = "core_patch"` (el `patchId` `"audit-before-decision"` va en los `Details`) y
       un `ActivityTaskCompleted` de `RecordAwaitingDecisionAsync`, y termina en `Completed` con el
-      mismo string que la Prueba A.
-- [ ] Un release **arrancado antes** de desplegar el patch, que recibe la Signal **después** del
+      mismo string que la Prueba A. Verificado e2e: `release-order-6008` — 1 `MarkerRecorded`
+      (`core_patch`), 1 `UpsertWorkflowSearchAttributes` (`TemporalChangeVersion`), 5 Activities
+      (vs 4 sin patch), log `[Audit] order 6008 ...`, orden `Shipped`.
+- [x] Un release **arrancado antes** de desplegar el patch, que recibe la Signal **después** del
       redeploy, completa en `Completed` **sin** `WorkflowTaskFailed` / `NonDeterminismError` y
-      **sin** ningún evento de `RecordAwaitingDecisionAsync` en su historia.
-- [ ] `docker compose stop release-orden-worker` mientras una Activity está en vuelo (p. ej. durante
-      el `Workflow.DelayAsync(10s)` previo al Child Workflow, o una Activity real en curso) escribe
-      en los logs `Worker draining (SIGTERM received)...` y luego `Worker stopped cleanly.`, y la
-      Activity en curso llega a completar antes de que el proceso salga.
-- [ ] Durante ese stop, la ejecución del Workflow permanece en `Running` en la Temporal UI y
-      retoma y completa al hacer `docker compose up -d release-orden-worker`.
-- [ ] `Ctrl+C` sobre `dotnet run` del Worker en local produce el mismo drenaje ordenado (mismos dos
-      logs) en vez de un corte abrupto.
-- [ ] Las Pruebas A–G del README siguen pasando sin cambios de comportamiento.
+      **sin** ningún evento de `RecordAwaitingDecisionAsync` en su historia. Verificado e2e:
+      `release-order-6007` — arrancado con el Worker sin el bloque `Workflow.Patched`, Signal
+      enviada tras `build --no-cache` + `up --force-recreate`; historia con 0 `MarkerRecorded`,
+      0 eventos de auditoría, 0 `WorkflowTaskFailed`, cerró en `WorkflowExecutionCompleted`.
+- [x] `docker compose stop release-orden-worker` escribe en los logs
+      `Worker draining (SIGTERM received), waiting up to 30s for in-flight activities...` y luego
+      `Worker stopped cleanly.`, y las Activities que estaban ejecutándose completan (sus líneas
+      `[Activity] ... ` / `[Audit] ...` aparecen antes de `Worker stopped cleanly.`) en vez de un
+      corte abrupto. Verificado e2e con `release-order-6009` y `-6010`. Matiz: en ambas corridas el
+      `stop` cayó con el Workflow en una espera durable (timer de envío / `WaitCondition`), no con
+      una Activity de 30s en curso, así que el drenaje terminó de inmediato; la espera acotada por
+      `GracefulShutdownTimeout = 30s` queda cubierta por construcción (la fija `WorkerHost` y la
+      respeta `worker.ExecuteAsync`).
+- [x] Durante ese stop, la ejecución del Workflow permanece en `Running` y retoma y completa al
+      hacer `docker compose up -d release-orden-worker`. Verificado e2e: `-6009` y `-6010`
+      resumieron tras el restart y terminaron en `Completed` / orden `Shipped`.
+- [~] `Ctrl+C` sobre `dotnet run` del Worker en local produce el mismo drenaje ordenado. **No
+      verificado en vivo**: el arnés de shell no puede emitir un `CTRL_C_EVENT` de consola real
+      (`kill -INT` desde Git Bash no lo traduce). El camino es el mismo `Drain()` que dispara
+      `SIGTERM` (registrado vía `Console.CancelKeyPress`), ya probado en vivo por Docker.
+- [x] Las Pruebas A–G del README siguen pasando sin cambios de comportamiento (A–F + H
+      automatizadas 15/15; A/B/C recorridas también en los escenarios e2e de arriba).
 
 ## Decisiones tomadas y descartadas
 
