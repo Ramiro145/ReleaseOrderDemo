@@ -1,6 +1,7 @@
 ﻿using Microsoft.Extensions.DependencyInjection;
 using Temporalio.Client;
 using Temporalio.Worker;
+using Common;
 using OrderReportDemo.Activities;
 using OrderReportDemo.Workflows;
 using OrderReportDemo.Infrastructure;
@@ -26,10 +27,14 @@ var provider = services.BuildServiceProvider();
 var activities = provider.GetRequiredService<OrderReportActivities>();
 
 var options = new TemporalWorkerOptions("report-task-queue")
-    .AddAllActivities(activities)
-    .AddWorkflow<OrderReportWorkflow>();
+{
+    // Mismo drenaje que los workers de ReleaseOrder (spec 04): ante SIGTERM /
+    // Ctrl+C, esperar a las Activities en vuelo antes de cerrar.
+    GracefulShutdownTimeout = WorkerHost.GracefulShutdownTimeout
+};
+options.AddAllActivities(activities);
+options.AddWorkflow<OrderReportWorkflow>();
 
 using var worker = new TemporalWorker(client, options);
 
-Console.WriteLine("OrderReport worker listening on 'report-task-queue'...");
-await worker.ExecuteAsync(CancellationToken.None);
+await WorkerHost.RunWithGracefulShutdownAsync(worker, "report-task-queue");

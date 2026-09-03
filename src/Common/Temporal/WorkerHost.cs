@@ -15,7 +15,7 @@ namespace Common
         // cerrar tras recibir la señal de apagado (spec 04). El stop_grace_period
         // de docker-compose debe ser mayor que esto para que Docker no mande SIGKILL
         // antes de que el drenaje termine.
-        private static readonly TimeSpan GracefulShutdownTimeout = TimeSpan.FromSeconds(30);
+        public static readonly TimeSpan GracefulShutdownTimeout = TimeSpan.FromSeconds(30);
 
         /// <summary>
         /// Registra un workflow y múltiples clases de actividades resueltas desde el contenedor DI.
@@ -91,9 +91,14 @@ namespace Common
         /// desde <c>docker compose stop</c>) y entonces drena: deja de tomar tareas nuevas
         /// y espera hasta <see cref="GracefulShutdownTimeout"/> a que terminen las
         /// Activities en vuelo, en vez de morir de golpe (spec 04).
+        /// Público para que workers que arman su propio <see cref="TemporalWorker"/>
+        /// (p. ej. OrderReport, que preconstruye el <see cref="TemporalClient"/> para DI)
+        /// reusen el mismo drenaje sin pasar por <see cref="RunAsync{TWorkflow}"/>.
+        /// Recordá fijar <c>GracefulShutdownTimeout = WorkerHost.GracefulShutdownTimeout</c>
+        /// en las <see cref="TemporalWorkerOptions"/> antes de construir el Worker.
         /// </summary>
-        private static async Task RunWithGracefulShutdownAsync(
-            TemporalWorker worker, string taskQueue, CancellationToken cancellationToken)
+        public static async Task RunWithGracefulShutdownAsync(
+            TemporalWorker worker, string taskQueue, CancellationToken cancellationToken = default)
         {
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
 

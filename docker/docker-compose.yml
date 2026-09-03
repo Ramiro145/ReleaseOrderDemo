@@ -20,6 +20,9 @@ services:
       dockerfile: docker/Dockerfile.ReleaseOrder
     container_name: crear_orden_worker
     command: ["create", "worker"]
+    # Mayor que el GracefulShutdownTimeout (30s) de WorkerHost para que Docker
+    # deje drenar las Activities en vuelo antes de mandar SIGKILL (spec 04).
+    stop_grace_period: 45s
     environment:
       - DB_CONNECTION=Server=db;Database=OrdersDb;User Id=sa;Password=YourStrong!Passw0rd;TrustServerCertificate=True;
       - TEMPORAL_HOST=temporal:7233
@@ -33,6 +36,9 @@ services:
       dockerfile: docker/Dockerfile.ReleaseOrder
     container_name: release_orden_worker
     command: ["release", "worker"]
+    # Mayor que el GracefulShutdownTimeout (30s) de WorkerHost para que Docker
+    # deje drenar las Activities en vuelo antes de mandar SIGKILL (spec 04).
+    stop_grace_period: 45s
     environment:
       - DB_CONNECTION=Server=db;Database=OrdersDb;User Id=sa;Password=YourStrong!Passw0rd;TrustServerCertificate=True;
       - TEMPORAL_HOST=temporal:7233
@@ -45,6 +51,9 @@ services:
       context: ..
       dockerfile: docker/Dockerfile.OrderReport
     container_name: orderreport_worker
+    # Mayor que el GracefulShutdownTimeout (30s) de WorkerHost para que Docker
+    # deje drenar las Activities en vuelo antes de mandar SIGKILL (spec 04).
+    stop_grace_period: 45s
     environment:
       - SQLSERVER_CONN=Server=db;Database=OrdersDb;User Id=sa;Password=YourStrong!Passw0rd;TrustServerCertificate=True;
       - TEMPORAL_HOST=temporal:7233
