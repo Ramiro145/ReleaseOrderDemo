@@ -5,7 +5,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## What this is
 
 Didactic demo of Temporal.io capabilities on .NET 8: SAGA compensation, durable waits via Signal
-and Update, and retryable vs non-retryable Activity errors. Domain (orders/inventory/payment) is
+and Update, retryable vs non-retryable Activity errors, Workflow code versioning via
+`Workflow.Patched`, and graceful Worker drain on SIGTERM. Domain (orders/inventory/payment) is
 kept deliberately simple — see README.md for the full walkthrough of the two test scenarios
 (Signal approved / Signal rejected).
 
@@ -20,17 +21,21 @@ Tests (`test/ReleaseOrder.Tests/`, xUnit + Temporal time-skipping):
 ```powershell
 dotnet test ReleaseOrderDemo.sln
 ```
-The suite covers README Pruebas **A–F** for `ReleaseOrderWorkflow` (SAGA + Signal/Update + its
-`ShippingWorkflow` child) against the real workflows + Activities + Services; only the SQL edge
-(`IOrderStateMachine`, the repos) is faked in memory (`Fakes/`), so no Docker or SQL Server is
-needed — 13 tests in ~0.8s. Test classes: `ReleaseOrderWorkflowTests` (A/B + child happy path),
+The suite covers README Pruebas **A–F** and **H** for `ReleaseOrderWorkflow` (SAGA + Signal/Update +
+its `ShippingWorkflow` child + the `Workflow.Patched` version guard) against the real workflows +
+Activities + Services; only the SQL edge (`IOrderStateMachine`, the repos) is faked in memory
+(`Fakes/`), so no Docker or SQL Server is needed — 15 tests in ~0.8s. Test classes:
+`ReleaseOrderWorkflowTests` (A/B + child happy path),
 `ReleaseOrderUpdateDecisionTests` (D — Update result / validator reject / first-decision-wins),
 `ReleaseOrderRetryPolicyTests` (E — retryable vs non-retryable), `ReleaseOrderChildWorkflowTests`
 (C.2 — child failure propagating to the parent SAGA), `ReleaseOrderIdempotencyTests` (F — replay
-probe / retried compensation). `Support/HistoryAssertions.cs` reads the Event History via
+probe / retried compensation), `ReleaseOrderPatchingTests` (H — the patched audit step runs on new
+executions and writes the `core_patch` marker without changing the business result).
+`Support/HistoryAssertions.cs` reads the Event History via
 `WorkflowService.GetWorkflowExecutionHistoryAsync` (not exposed on `WorkflowHandle` in Temporalio
-1.9.0) to count Activity attempts and inspect Child Workflow events;
-`Fakes/FakeOrderDatabase.FailAfterEffect(...)` arms a post-effect throw for the F.3 case.
+1.9.0) to count Activity attempts, inspect Child Workflow events, and count patch markers by name
+(`CountMarkers("core_patch")`); `Fakes/FakeOrderDatabase.FailAfterEffect(...)` arms a post-effect
+throw for the F.3 case.
 `WorkflowEnvironment.StartTimeSkippingAsync` fast-forwards the two demo `Workflow.DelayAsync`
 calls (5s + 10s) in `ReleaseOrderWorkFlow.cs`, so the suite runs in seconds. First run downloads the
 time-skipping test server binary (needs network once, then cached in the user profile).
@@ -73,7 +78,16 @@ Five projects under `src/`, all targeting net8.0, referencing `Temporalio` 1.9.0
     via `GetRequiredService` (so activity classes must be registered in the DI container).
     `additionalWorkflowTypes` (optional) registers extra `[Workflow]` classes on the same worker —
     used to co-locate a Child Workflow with its parent on one task queue (Child Workflows must be
-    registered on whichever worker executes them).
+    registered on whichever worker executes them). Both `RunAsync` overloads set
+    `TemporalWorkerOptions.GracefulShutdownTimeout` to `WorkerHost.GracefulShutdownTimeout` (30s)
+    and route through the public `RunWithGracefulShutdownAsync(worker, taskQueue, ct)`: it wires
+    `Console.CancelKeyPress` (Ctrl+C) and `PosixSignalRegistration` for `SIGTERM` (from
+    `docker compose stop`) to a linked `CancellationTokenSource`, so on shutdown the Worker stops
+    polling and waits up to 30s for in-flight Activities instead of dying abruptly, logging
+    `Worker draining (... received)...` / `Worker stopped cleanly.`. `docker-compose.yml` gives the
+    three worker services `stop_grace_period: 45s` (> 30s) so Docker doesn't SIGKILL mid-drain.
+    `OrderReport/Program.cs` builds its own `TemporalWorker` (it pre-constructs the `TemporalClient`
+    for DI) but calls `RunWithGracefulShutdownAsync` directly for the same drain. See README Prueba I.
   - `WorkflowStarter.StartAsync<TWorkflow[,TResult]>(taskQueue, expr, idPrefix)` connects and
     starts a workflow one-shot (used by `Program.cs`'s CLI `create`/`release` modes, not by the API).
   - `WorkflowValidator.ValidateWorkflowAsync` — `DescribeAsync` wrapper used by OrderApi's status
@@ -90,7 +104,14 @@ Five projects under `src/`, all targeting net8.0, referencing `Temporalio` 1.9.0
     `[WorkflowUpdateValidator] ValidateSubmitReleaseDecisionUpdate` synchronously before being
     accepted: it rejects (no event written, caller gets the error immediately) unless
     `_status == "Waiting for release decision"` — the Signal path has no equivalent guard and is
-    always accepted. On approval, marks the order `Completed`, then starts `ShippingWorkflow` as a
+    always accepted. Right before the `WaitConditionAsync`, an
+    `if (Workflow.Patched("audit-before-decision"))` block runs `AuditActivities.RecordAwaitingDecisionAsync`
+    — a log-only step added after executions were already live (spec 04). `Patched` returns `true`
+    on new executions (writing a `core_patch` marker + a `TemporalChangeVersion` search attribute)
+    and `false` when replaying a pre-patch history, so the `else` (do nothing) keeps old in-flight
+    executions deterministic. Only phase 1 (`if/else`) is in the code; `DeprecatePatch` and removal
+    are documented in README Prueba H, not done. On approval, marks the order `Completed`, then
+    starts `ShippingWorkflow` as a
     **Child Workflow** (`Workflow.ExecuteChildWorkflowAsync`, child Workflow Id
     `shipping-order-{orderId}`) to ship the order — still inside the same `try`, so if the child
     exhausts its own retries and fails, that exception is caught exactly like an Activity failure
@@ -126,7 +147,9 @@ Five projects under `src/`, all targeting net8.0, referencing `Temporalio` 1.9.0
     Created → reserve inventory → mark Completed, compensating to `Failed` on error.
   - `Activities/*` — `InventoryActivities`, `PaymentActivities`, `ShippingActivities`,
     `OrderStatusActivities`, `OrderLookupActivities`, each backed by an `Services/*` implementation
-    (`*Repository`/`*Service`) talking to SQL Server via `Microsoft.Data.SqlClient`.
+    (`*Repository`/`*Service`) talking to SQL Server via `Microsoft.Data.SqlClient`. `AuditActivities`
+    (`RecordAwaitingDecisionAsync`) is the odd one out: log-only, no `Service`, no SQL — it exists
+    only as the payload of the `audit-before-decision` patch and must not touch `IOrderStateMachine`.
     `ShippingActivities.ShipOrderAsync` (invoked only from the `ShippingWorkflow` Child Workflow)
     has the same magic-value convention as `PaymentActivities`: in `ShippingService.ShipAsync`, an
     order `Address` containing `"FAIL"` (case-insensitive) simulates a failed dispatch — the
