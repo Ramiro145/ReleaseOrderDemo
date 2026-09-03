@@ -333,9 +333,9 @@ Repite la Prueba B (Signal rechazada) o la Prueba C.2 (`Address` con `FAIL`): si
 
 ## Prueba G: tests automatizados con time-skipping
 
-`test/ReleaseOrder.Tests/` (xUnit) cubre las Pruebas **A–F** sobre `ReleaseOrderWorkflow`
-(SAGA + Signal/Update + su Child `ShippingWorkflow`) sin Docker ni SQL Server, con el
-reloj de Temporal acelerado — 13 tests en ~0.8s.
+`test/ReleaseOrder.Tests/` (xUnit) cubre las Pruebas **A–F** y **H** sobre `ReleaseOrderWorkflow`
+(SAGA + Signal/Update + su Child `ShippingWorkflow` + el patch de versionado) sin Docker ni
+SQL Server, con el reloj de Temporal acelerado — 15 tests en ~0.8s.
 
 ```powershell
 dotnet test ReleaseOrderDemo.sln
@@ -350,13 +350,15 @@ dotnet test --filter "ReleaseOrderWorkflowTests"
 | `ReleaseOrderRetryPolicyTests` | E | reintentable (3 intentos) vs no-reintentable por la Activity vs no-reintentable por el Workflow |
 | `ReleaseOrderChildWorkflowTests` | C.2 | fallo del Child Workflow (agota sus reintentos propios) propagándose al SAGA padre |
 | `ReleaseOrderIdempotencyTests` | F | replay probe: el efecto se aplica una sola vez pese al reintento; compensación reintentada que no restaura stock de más |
+| `ReleaseOrderPatchingTests` | H | `Workflow.Patched("audit-before-decision")`: la ejecución nueva corre el paso de auditoría y escribe el marker `core_patch`, sin cambiar el resultado de negocio |
 
 Dos piezas de infra de test propias:
 
 - **`Support/HistoryAssertions.cs`** — lee el Event History vía
   `WorkflowService.GetWorkflowExecutionHistoryAsync` (Temporalio 1.9.0 no lo expone desde
-  el `WorkflowHandle`) para contar intentos de una Activity y leer su `errorType`, y para
-  asertar eventos de Child Workflow en la historia del padre.
+  el `WorkflowHandle`) para contar intentos de una Activity y leer su `errorType`, para
+  asertar eventos de Child Workflow en la historia del padre, y para contar markers de patch
+  por nombre (`CountMarkers("core_patch")`, Prueba H).
 - **`Fakes/FakeOrderDatabase.FailAfterEffect(...)`** — arma una sonda que aplica el efecto
   de un paso de `IOrderStateMachine` y **después** lanza, reproduciendo la ventana del
   at-least-once que la Prueba F.3 necesita.
@@ -381,6 +383,135 @@ Tres piezas, igual que en cualquier suite de Temporal:
 
 La primera corrida descarga el binario del test server (necesita red una vez;
 después queda cacheado en el perfil del usuario).
+
+## Prueba H: versionado de código de Workflow (`Workflow.Patched`)
+
+Cambiar el código de un Workflow mientras hay ejecuciones vivas rompe por
+no-determinismo: al reproducir la historia vieja con el código nuevo, Temporal ve
+comandos que no coinciden y marca `WorkflowTaskFailed` / `NonDeterminismError`.
+`Workflow.Patched("<patchId>")` deja convivir las dos versiones.
+
+En `ReleaseOrderWorkFlow.cs`, justo antes de esperar la decisión, se agregó un
+paso de auditoría **detrás de un patch**:
+
+```csharp
+if (Workflow.Patched("audit-before-decision"))
+{
+    await Workflow.ExecuteActivityAsync(
+        (AuditActivities a) => a.RecordAwaitingDecisionAsync(orderId),
+        DefaultOptions);
+}
+// else: código viejo — no hacía nada acá.
+```
+
+`Workflow.WaitConditionAsync(() => _decisionReceived)` deja la ejecución abierta
+sin límite: es la ventana para redeployar el Worker con una ejecución viva.
+
+### H.1 — Ejecución vieja en vuelo + Signal diferida
+
+1. **Worker sin el patch.** Comentá el bloque `if (Workflow.Patched(...))` (o hacé
+   `git stash` de ese cambio), y levantá el Worker:
+
+   ```powershell
+   docker compose build --no-cache release-orden-worker
+   docker compose up -d --force-recreate release-orden-worker
+   ```
+
+2. **Arrancá un release y dejalo esperando.** `POST /orders` (con `Address` sin
+   `FAIL`, `Amount` normal), `POST /orders/{orderId}/release`, y esperá a que
+   `GET /orders/{orderId}/status` devuelva `Waiting for release decision`. **No
+   mandes la decisión todavía.**
+
+3. **Redeployá el Worker con el patch.** Restaurá el bloque (`git stash pop`) y:
+
+   ```powershell
+   docker compose build --no-cache release-orden-worker
+   docker compose up -d --force-recreate release-orden-worker
+   ```
+
+4. **Ahora sí mandá la Signal.** `POST /orders/{orderId}/release/decision` con
+   `{ "approved": true }`.
+
+**Resultado esperado (ejecución vieja):** termina en `Completed` **sin**
+`WorkflowTaskFailed` por no-determinismo y **sin** ningún evento de
+`RecordAwaitingDecisionAsync` en su Event History. Al reproducir su historia, que
+no tiene el marker del patch, `Workflow.Patched(...)` devolvió `false` y tomó el
+`else`.
+
+### H.2 — Ejecución nueva con el patch
+
+Con el mismo Worker (ya con el patch), arrancá otro release con un `orderId`
+**fresco** y aprobalo. En su Event History vas a ver:
+
+- un `MarkerRecorded` con `MarkerName = "core_patch"` (el SDK .NET usa el
+  sdk-core; los SDK Go/Java legacy lo llaman `"Version"`) y un
+  `UpsertWorkflowSearchAttributes` con `TemporalChangeVersion`,
+- un `ActivityTaskScheduled` / `ActivityTaskCompleted` de
+  `RecordAwaitingDecisionAsync`,
+- en los logs: `[Audit] order {id} awaiting release decision`.
+
+El resultado de negocio es idéntico al de la Prueba A: el patch agrega un paso,
+no cambia el desenlace.
+
+> Usá un `orderId` fresco por corrida (misma razón que la Prueba F: el Workflow Id
+> `release-order-{orderId}` es estable y `Orders.Status` es la marca de
+> idempotencia).
+
+### Ciclo de vida del patch (fases 2 y 3, no implementadas acá)
+
+`ReleaseOrderWorkFlow.cs` queda en la **fase 1** (`if/else`) como material
+didáctico permanente. En un proyecto real el patch se retira en dos pasos más:
+
+- **Fase 2** — cuando ya no queda **ninguna** ejecución vieja abierta ni que se
+  vaya a consultar: `Workflow.DeprecatePatch("audit-before-decision");` y se borra
+  el `else`. Sigue escribiendo el marker para históricas ya cerradas, pero el
+  código asume siempre la rama nueva.
+- **Fase 3** — cuando ni siquiera se van a reproducir historias viejas: se borra
+  también el `DeprecatePatch` y queda solo el paso nuevo.
+
+## Prueba I: drenaje del Worker (graceful shutdown)
+
+`WorkerHost.RunAsync` cablea `SIGTERM` (de `docker compose stop`) y `Ctrl+C` a un
+`CancellationToken`, y fija `TemporalWorkerOptions.GracefulShutdownTimeout = 30s`.
+Al recibir la señal, el Worker deja de tomar tareas nuevas y espera hasta 30s a
+que terminen las Activities en vuelo, en vez de morir de golpe.
+`docker-compose.yml` pone `stop_grace_period: 45s` en los tres workers (mayor que
+los 30s) para que Docker no mande `SIGKILL` antes de que el drenaje termine.
+
+### I.1 — `docker compose stop` con una Activity en vuelo
+
+1. Arrancá un release y aprobalo (Prueba A). Tras la aprobación el Workflow hace
+   `Workflow.DelayAsync(10s)` y luego el Child Workflow con
+   `ShippingActivities.ShipOrderAsync` — esa es la ventana.
+2. Mientras corre, en otra consola:
+
+   ```powershell
+   docker compose stop release-orden-worker
+   docker compose logs --tail=50 release-orden-worker
+   ```
+
+**Resultado esperado en los logs:**
+
+```text
+Worker draining (SIGTERM received), waiting up to 30s for in-flight activities...
+[Activity] Order {id} shipped successfully
+Worker stopped cleanly.
+```
+
+La Activity en curso **completa** antes de que el proceso salga. En Temporal UI
+la ejecución sigue en `Running`.
+
+3. Volvé a levantar el Worker y la ejecución retoma y termina:
+
+   ```powershell
+   docker compose up -d release-orden-worker
+   ```
+
+### I.2 — `Ctrl+C` en local
+
+Corriendo el Worker con `dotnet run` (sin Docker), `Ctrl+C` produce el mismo
+drenaje ordenado (`Worker draining (Ctrl+C received)...` → `Worker stopped
+cleanly.`) en vez de un corte abrupto.
 
 ## Alcance intencional
 
