@@ -34,6 +34,7 @@ namespace ReleaseOrderDemo.Infrastructure
             services.AddTransient<ShippingActivities>();
             services.AddTransient<OrderStatusActivities>();
             services.AddTransient<OrderLookupActivities>();
+            services.AddTransient<AuditActivities>();
 
             return services;
         }

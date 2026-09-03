@@ -33,7 +33,8 @@ namespace ReleaseOrderDemo
                         typeof(PaymentActivities),
                         typeof(ShippingActivities),
                         typeof(OrderStatusActivities),
-                        typeof(OrderLookupActivities)
+                        typeof(OrderLookupActivities),
+                        typeof(AuditActivities)
                     };
 
                     if (workerName == "release")
